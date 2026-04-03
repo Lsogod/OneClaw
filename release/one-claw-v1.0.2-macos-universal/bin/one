@@ -49,6 +49,17 @@ migrate_isolated_config() {
 migrate_isolated_config
 export CLAUDE_CONFIG_DIR="$ONE_CLAW_CONFIG_DIR"
 
+DEFAULT_CODEX_HOME="${HOME}/.codex"
+if [[ -n "${CODEX_HOME:-}" && ! -e "${CODEX_HOME}" ]]; then
+  export CODEX_HOME="$DEFAULT_CODEX_HOME"
+elif [[ -z "${CODEX_HOME:-}" ]]; then
+  export CODEX_HOME="$DEFAULT_CODEX_HOME"
+fi
+
+if [[ ! -e "$CODEX_HOME" ]]; then
+  mkdir -p "$CODEX_HOME"
+fi
+
 ADAPTER_URL="${ONE_CLAW_ADAPTER_BASE_URL:-http://127.0.0.1:4317}"
 HEALTH_URL="${ADAPTER_URL%/}/health"
 STACK_LOG="${ONE_CLAW_STACK_LOG:-${TMPDIR:-/tmp}/one-claw-stack.log}"
