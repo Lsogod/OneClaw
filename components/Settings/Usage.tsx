@@ -3,7 +3,9 @@ import * as React from 'react';
 import { useEffect, useState } from 'react';
 import { extraUsage as extraUsageCommand } from 'src/commands/extra-usage/index.js';
 import { formatCost } from 'src/cost-tracker.js';
+import { getCodexAuthSnapshot, refreshCodexUsageCache } from 'src/services/codex/auth.js';
 import { getSubscriptionType } from 'src/utils/auth.js';
+import { getAPIProvider, getAPIProviderDisplayName } from 'src/utils/model/providers.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 import { Box, Text } from '../../ink.js';
 import { useKeybinding } from '../../keybindings/useKeybinding.js';
@@ -172,7 +174,9 @@ function LimitBar(t0) {
   }
 }
 export function Usage(): React.ReactNode {
+  const apiProvider = getAPIProvider();
   const [utilization, setUtilization] = useState<Utilization | null>(null);
+  const [codexSnapshot, setCodexSnapshot] = useState(() => apiProvider === 'codex' ? getCodexAuthSnapshot() : null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const {
@@ -184,6 +188,12 @@ export function Usage(): React.ReactNode {
     setIsLoading(true);
     setError(null);
     try {
+      if (apiProvider === 'codex') {
+        await refreshCodexUsageCache();
+        setCodexSnapshot(getCodexAuthSnapshot());
+        setUtilization({});
+        return;
+      }
       const data = await fetchUtilization();
       setUtilization(data);
     } catch (err) {
@@ -198,7 +208,7 @@ export function Usage(): React.ReactNode {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [apiProvider]);
   useEffect(() => {
     void loadUtilization();
   }, [loadUtilization]);
@@ -216,6 +226,53 @@ export function Usage(): React.ReactNode {
             <ConfigurableShortcutHint action="settings:retry" context="Settings" fallback="r" description="retry" />
             <ConfigurableShortcutHint action="confirm:no" context="Settings" fallback="Esc" description="cancel" />
           </Byline>
+        </Text>
+      </Box>;
+  }
+  if (apiProvider === 'codex') {
+    if (isLoading && !codexSnapshot) {
+      return <Box flexDirection="column" gap={1}>
+          <Text dimColor>Loading usage data…</Text>
+          <Text dimColor>
+            <ConfigurableShortcutHint action="confirm:no" context="Settings" fallback="Esc" description="cancel" />
+          </Text>
+        </Box>;
+    }
+    const snapshot = codexSnapshot ?? getCodexAuthSnapshot();
+    const rows = [{
+      label: 'Provider',
+      value: getAPIProviderDisplayName(apiProvider)
+    }, {
+      label: 'Plan',
+      value: snapshot.plan ?? 'Unknown'
+    }, {
+      label: 'Plan source',
+      value: snapshot.planSource === 'live_usage' ? 'Live usage API' : snapshot.planSource === 'auth_json' ? 'auth.json token' : 'Unavailable'
+    }, ...(snapshot.subscriptionLastChecked ? [{
+      label: 'Subscription last checked',
+      value: snapshot.subscriptionLastChecked
+    }] : []), ...(snapshot.usageFetchedAt ? [{
+      label: 'Usage fetched at',
+      value: snapshot.usageFetchedAt
+    }] : []), ...(snapshot.subscriptionActiveStart ? [{
+      label: 'Active since',
+      value: snapshot.subscriptionActiveStart
+    }] : []), ...(snapshot.subscriptionActiveUntil ? [{
+      label: 'Active until',
+      value: snapshot.subscriptionActiveUntil
+    }] : []), ...(snapshot.organizationTitle ? [{
+      label: 'Organization',
+      value: snapshot.organizationTitle
+    }] : [])];
+    return <Box flexDirection="column" gap={1} width="100%">
+        {!snapshot.loggedIn && <Text dimColor>Not logged in. Run one auth login.</Text>}
+        {snapshot.loggedIn && rows.map(({
+        label,
+        value
+      }) => <Box key={label} flexDirection="row" gap={1}><Text bold={true}>{label}:</Text><Text>{value}</Text></Box>)}
+        <Text dimColor={true}>Detailed session and weekly limit bars are only available for Anthropic subscription usage endpoints.</Text>
+        <Text dimColor>
+          <ConfigurableShortcutHint action="confirm:no" context="Settings" fallback="Esc" description="cancel" />
         </Text>
       </Box>;
   }

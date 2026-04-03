@@ -4,6 +4,10 @@ import { logEvent } from '../../services/analytics/index.js'
 import type { LocalCommandCall } from '../../types/command.js'
 import { isAnthropicAuthEnabled } from '../../utils/auth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
+import {
+  getAPIProviderDisplayName,
+  isCodexProvider,
+} from '../../utils/model/providers.js'
 import { settingsChangeDetector } from '../../utils/settings/changeDetector.js'
 import {
   getInitialSettings,
@@ -14,6 +18,13 @@ import { isVoiceModeEnabled } from '../../voice/voiceModeEnabled.js'
 const LANG_HINT_MAX_SHOWS = 2
 
 export const call: LocalCommandCall = async () => {
+  if (isCodexProvider()) {
+    return {
+      type: 'text' as const,
+      value: `Voice mode is not available with ${getAPIProviderDisplayName()} sign-in yet.`,
+    }
+  }
+
   // Check auth and kill-switch before allowing voice mode
   if (!isVoiceModeEnabled()) {
     // Differentiate: OAuth-less users get an auth hint, everyone else
@@ -22,7 +33,7 @@ export const call: LocalCommandCall = async () => {
       return {
         type: 'text' as const,
         value:
-          'Voice mode requires a Claude.ai account. Please run /login to sign in.',
+          'Voice mode requires a One account. Please run /login to sign in.',
       }
     }
     return {
@@ -75,7 +86,7 @@ export const call: LocalCommandCall = async () => {
     return {
       type: 'text' as const,
       value:
-        'Voice mode requires a Claude.ai account. Please run /login to sign in.',
+        'Voice mode requires a One account. Please run /login to sign in.',
     }
   }
 

@@ -7,6 +7,10 @@ import { ConsoleOAuthFlow } from './ConsoleOAuthFlow.js';
 import { Select } from './CustomSelect/index.js';
 import { Dialog } from './design-system/Dialog.js';
 import { TeleportStash } from './TeleportStash.js';
+import {
+  getAPIProviderDisplayName,
+  isCodexProvider,
+} from '../utils/model/providers.js';
 export type TeleportLocalErrorType = 'needsLogin' | 'needsGitStash';
 type TeleportErrorProps = {
   onComplete: () => void;
@@ -133,6 +137,12 @@ export function TeleportError(t0) {
     case "needsLogin":
       {
         if (isLoggingIn) {
+          if (isCodexProvider()) {
+            return <Dialog title="Remote sessions unavailable" onCancel={onCancel}><Box flexDirection="column"><Text dimColor={true}>Remote sessions are not available with {getAPIProviderDisplayName()} sign-in yet.</Text><Text dimColor={true}>This flow still depends on the Claude web account system.</Text></Box><Select options={[{
+                label: "Exit",
+                value: "exit"
+              }]} onChange={handleLoginDialogSelect} /></Dialog>;
+          }
           let t9;
           if ($[14] !== handleLoginComplete) {
             t9 = <ConsoleOAuthFlow onDone={handleLoginComplete} mode="login" forceLoginMethod="claudeai" />;
@@ -145,14 +155,14 @@ export function TeleportError(t0) {
         }
         let t9;
         if ($[16] === Symbol.for("react.memo_cache_sentinel")) {
-          t9 = <Box flexDirection="column"><Text dimColor={true}>Teleport requires a Claude.ai account.</Text><Text dimColor={true}>Your One Pro/Max subscription will be used by One Claw.</Text></Box>;
+          t9 = <Box flexDirection="column"><Text dimColor={true}>Teleport requires a One account with remote-session support.</Text><Text dimColor={true}>This feature is still tied to the Claude web account system.</Text></Box>;
           $[16] = t9;
         } else {
           t9 = $[16];
         }
         let t10;
         if ($[17] === Symbol.for("react.memo_cache_sentinel")) {
-          t10 = <Dialog title="Log in to Claude" onCancel={onCancel}>{t9}<Select options={[{
+          t10 = <Dialog title="Log in to One Claw" onCancel={onCancel}>{t9}<Select options={[{
               label: "Login with One account",
               value: "login"
             }, {

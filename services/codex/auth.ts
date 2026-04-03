@@ -1,5 +1,5 @@
 import { execa } from 'execa'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { logForDebugging } from '../../utils/debug.js'
@@ -111,18 +111,36 @@ function writeCodexUsageCache(cache: CodexUsageCache): void {
   }
 }
 
+export function clearCodexUsageCache(): void {
+  const file = getCodexUsageCachePath()
+  if (!existsSync(file)) {
+    return
+  }
+
+  try {
+    unlinkSync(file)
+  } catch (error) {
+    logForDebugging(
+      `[codex-auth] Failed to clear usage cache: ${errorMessage(error)}`,
+    )
+  }
+}
+
 export function getCodexAuthSnapshot(): Omit<CodexAuthStatus, 'rawStatus'> {
   const authFile = readCodexAuthFile()
   const usageCache = readCodexUsageCache()
   const accessPayload = decodeJwtPayload(authFile?.tokens?.access_token)
   const idPayload = decodeJwtPayload(authFile?.tokens?.id_token)
+  const loggedIn = !!authFile?.tokens?.access_token
   const tokenPlan =
     getPlanFromPayload(accessPayload) ?? getPlanFromPayload(idPayload)
   const livePlan =
-    typeof usageCache?.planType === 'string' ? usageCache.planType : null
+    loggedIn && typeof usageCache?.planType === 'string'
+      ? usageCache.planType
+      : null
 
   return {
-    loggedIn: !!authFile?.tokens?.access_token,
+    loggedIn,
     authMode:
       typeof authFile?.auth_mode === 'string' ? authFile.auth_mode : null,
     accountId:
@@ -148,7 +166,9 @@ export function getCodexAuthSnapshot(): Omit<CodexAuthStatus, 'rawStatus'> {
     lastRefresh:
       typeof authFile?.last_refresh === 'string' ? authFile.last_refresh : null,
     usageFetchedAt:
-      typeof usageCache?.fetchedAt === 'string' ? usageCache.fetchedAt : null,
+      loggedIn && typeof usageCache?.fetchedAt === 'string'
+        ? usageCache.fetchedAt
+        : null,
   }
 }
 
@@ -330,10 +350,12 @@ export async function loginWithCodexCli(): Promise<void> {
   await execa('codex', ['login'], {
     stdio: 'inherit',
   })
+  await refreshCodexUsageCache()
 }
 
 export async function logoutFromCodexCli(): Promise<void> {
   await execa('codex', ['logout'], {
     stdio: 'inherit',
   })
+  clearCodexUsageCache()
 }

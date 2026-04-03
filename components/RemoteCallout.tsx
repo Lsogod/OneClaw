@@ -3,6 +3,7 @@ import { isBridgeEnabled } from '../bridge/bridgeEnabled.js';
 import { Box, Text } from '../ink.js';
 import { getClaudeAIOAuthTokens } from '../utils/auth.js';
 import { getGlobalConfig, saveGlobalConfig } from '../utils/config.js';
+import { isCodexProvider } from '../utils/model/providers.js';
 import type { OptionWithDescription } from './CustomSelect/select.js';
 import { Select } from './CustomSelect/select.js';
 import { PermissionDialog } from './permissions/PermissionDialog.js';
@@ -34,7 +35,7 @@ export function RemoteCallout({
   }, []);
   const options: OptionWithDescription<RemoteCalloutSelection>[] = [{
     label: 'Enable Remote Control for this session',
-    description: 'Opens a secure connection to claude.ai.',
+    description: 'Opens a secure remote control connection.',
     value: 'enable'
   }, {
     label: 'Never mind',
@@ -45,9 +46,9 @@ export function RemoteCallout({
       <Box flexDirection="column" paddingX={2} paddingY={1}>
         <Box marginBottom={1} flexDirection="column">
           <Text>
-            Remote Control lets you access this CLI session from the web
-            (claude.ai/code) or the Claude app, so you can pick up where you
-            left off on any device.
+            Remote Control lets you access this CLI session from a connected
+            web surface, so you can pick up where you left off on another
+            device.
           </Text>
           <Text> </Text>
           <Text>
@@ -68,6 +69,7 @@ export function RemoteCallout({
 export function shouldShowRemoteCallout(): boolean {
   const config = getGlobalConfig();
   if (config.remoteDialogSeen) return false;
+  if (isCodexProvider()) return false;
   if (!isBridgeEnabled()) return false;
   const tokens = getClaudeAIOAuthTokens();
   if (!tokens?.accessToken) return false;

@@ -1,5 +1,5 @@
 const defaults = {
-  VERSION: process.env.CLAUDE_CODE_VERSION ?? '1.0',
+  VERSION: process.env.CLAUDE_CODE_VERSION ?? '1.0.1',
   PACKAGE_URL: process.env.CLAUDE_CODE_PACKAGE_URL ?? '@anthropic-ai/claude-code',
   NATIVE_PACKAGE_URL:
     process.env.CLAUDE_CODE_NATIVE_PACKAGE_URL ?? '@anthropic-ai/claude-code',
