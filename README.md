@@ -51,24 +51,30 @@ one --version
 
 ## 安装
 
-### 1. 安装依赖
+### 1. 克隆仓库
 
 ```bash
-cd /Users/mac/Documents/claude-code-source
+git clone https://github.com/Lsogod/OneClaw.git
+cd OneClaw
+```
+
+### 2. 安装依赖
+
+```bash
 bun install
 ```
 
-### 2. 把 `one` 放进 PATH
+### 3. 把 `one` 放进 PATH
 
 仓库已经提供了启动器：
 
-- [bin/one](/Users/mac/Documents/claude-code-source/bin/one)
+- `bin/one`
 
 如果你本机还没把它链接到 PATH，可以执行：
 
 ```bash
 mkdir -p ~/.local/bin
-ln -sf /Users/mac/Documents/claude-code-source/bin/one ~/.local/bin/one
+ln -sf "$(pwd)/bin/one" ~/.local/bin/one
 ```
 
 然后确保 `~/.local/bin` 在 PATH 里。
@@ -138,27 +144,24 @@ one --version
 ### 启动 Codex 后端栈
 
 ```bash
-cd /Users/mac/Documents/claude-code-source
 bun run stack:codex
 ```
 
 ### 单独启动 CLI
 
 ```bash
-cd /Users/mac/Documents/claude-code-source
 bun run start:codex
 ```
 
 ### 单独启动 adapter
 
 ```bash
-cd /Users/mac/Documents/claude-code-source
 bun run adapter:codex
 ```
 
 ## 常用脚本
 
-见 [package.json](/Users/mac/Documents/claude-code-source/package.json)：
+见 `package.json`：
 
 - `bun run start`
 - `bun run start:codex`
@@ -185,18 +188,46 @@ bun run adapter:codex
 
 ## 项目结构
 
-核心目录：
+当前仓库的关键目录是：
 
-- [bin](/Users/mac/Documents/claude-code-source/bin)
-- [runtime](/Users/mac/Documents/claude-code-source/runtime)
-- [entrypoints](/Users/mac/Documents/claude-code-source/entrypoints)
-- [cli](/Users/mac/Documents/claude-code-source/cli)
-- [components](/Users/mac/Documents/claude-code-source/components)
-- [commands](/Users/mac/Documents/claude-code-source/commands)
-- [services/codex](/Users/mac/Documents/claude-code-source/services/codex)
-- [packages/codex-anthropic-adapter](/Users/mac/Documents/claude-code-source/packages/codex-anthropic-adapter)
-- [tools](/Users/mac/Documents/claude-code-source/tools)
-- [utils](/Users/mac/Documents/claude-code-source/utils)
+```text
+OneClaw/
+├── bin/                           # one 启动器
+├── runtime/                       # 运行时预加载宏
+├── entrypoints/                   # CLI / SDK 入口
+├── cli/                           # CLI 输出与 transport
+├── commands/                      # Slash 命令
+├── components/                    # Ink UI 组件
+├── hooks/                         # React hooks
+├── ink/                           # 终端渲染层
+├── packages/
+│   └── codex-anthropic-adapter/   # 本地 Anthropic-compatible adapter
+├── services/
+│   ├── api/                       # 模型调用层
+│   ├── codex/                     # Codex 登录和状态读取
+│   ├── mcp/                       # MCP 集成
+│   └── ...
+├── tools/                         # Tool runtime
+├── utils/                         # 公共工具函数
+├── scripts/                       # release 打包脚本
+├── stubs/                         # 本地 stub 依赖
+├── dist/                          # 构建生成产物
+├── release/                       # 本地 release 打包产物
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+如果你只关心主运行链路，建议优先看：
+
+- `bin/one`
+- `entrypoints/cli.tsx`
+- `main.tsx`
+- `cli/print.ts`
+- `services/api/client.ts`
+- `services/codex/auth.ts`
+- `packages/codex-anthropic-adapter/src/server.ts`
+- `packages/codex-anthropic-adapter/src/stack.ts`
 
 ## 当前改造点
 
@@ -214,21 +245,19 @@ bun run adapter:codex
 
 - adapter 的部分会话映射仍是进程内状态，重启后端后不会继承之前的内存态
 - Claude.ai 专属控制面能力没有完整迁移到 Codex 模式
-- 本仓库仍保留较多历史目录结构，仓库名也尚未改成 `one-claw`
+- 本仓库仍保留较多历史目录结构，尚未完全清理原始快照遗留模块
 
 ## 开发与验证
 
 ### 构建
 
 ```bash
-cd /Users/mac/Documents/claude-code-source
 bun run build
 ```
 
 ### 打包 release
 
 ```bash
-cd /Users/mac/Documents/claude-code-source
 bun run package:release
 ```
 
@@ -253,7 +282,6 @@ ONE_CLAW_RELEASE_PLATFORM=linux ONE_CLAW_RELEASE_ARCH=x64 bun run package:releas
 ### 类型检查
 
 ```bash
-cd /Users/mac/Documents/claude-code-source
 bun run typecheck
 ```
 
