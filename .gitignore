@@ -1,6 +1,7 @@
 node_modules/
 dist/
-release/
+!release/**/dist/
+!release/**/dist/**
 .DS_Store
 .claude/
 .sfdx/
