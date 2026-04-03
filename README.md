@@ -232,10 +232,17 @@ cd /Users/mac/Documents/claude-code-source
 bun run package:release
 ```
 
-默认会生成：
+默认会按当前系统自动命名，例如：
 
-- `release/one-claw-v1.0-macos-universal.tar.gz`
-- `release/one-claw-v1.0-macos-universal.zip`
+- macOS Apple Silicon: `release/one-claw-v1.0-macos-arm64.tar.gz`
+- macOS Intel: `release/one-claw-v1.0-macos-x64.tar.gz`
+- Linux x64: `release/one-claw-v1.0-linux-x64.tar.gz`
+
+如需手动指定：
+
+```bash
+ONE_CLAW_RELEASE_PLATFORM=linux ONE_CLAW_RELEASE_ARCH=x64 bun run package:release
+```
 
 解压后直接运行：
 

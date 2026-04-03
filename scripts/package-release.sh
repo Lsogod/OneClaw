@@ -4,9 +4,37 @@ set -euo pipefail
 ROOT="$(cd -P -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT"
 
+detect_platform() {
+  case "$(uname -s)" in
+    Darwin)
+      printf '%s\n' "macos"
+      ;;
+    Linux)
+      printf '%s\n' "linux"
+      ;;
+    *)
+      printf '%s\n' "unknown"
+      ;;
+  esac
+}
+
+detect_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)
+      printf '%s\n' "x64"
+      ;;
+    arm64|aarch64)
+      printf '%s\n' "arm64"
+      ;;
+    *)
+      uname -m
+      ;;
+  esac
+}
+
 VERSION="${ONE_CLAW_RELEASE_VERSION:-1.0}"
-PLATFORM="${ONE_CLAW_RELEASE_PLATFORM:-macos}"
-ARCH="${ONE_CLAW_RELEASE_ARCH:-universal}"
+PLATFORM="${ONE_CLAW_RELEASE_PLATFORM:-$(detect_platform)}"
+ARCH="${ONE_CLAW_RELEASE_ARCH:-$(detect_arch)}"
 NAME="one-claw-v${VERSION}-${PLATFORM}-${ARCH}"
 OUT_DIR="$ROOT/release"
 STAGE_DIR="$OUT_DIR/$NAME"
