@@ -266,6 +266,7 @@ bun run package:release
 - macOS Apple Silicon: `release/one-claw-v1.0-macos-arm64.tar.gz`
 - macOS Intel: `release/one-claw-v1.0-macos-x64.tar.gz`
 - Linux x64: `release/one-claw-v1.0-linux-x64.tar.gz`
+- Debian/Ubuntu x64: `release/one-claw_1.0_amd64.deb`
 
 如需手动指定：
 
@@ -273,10 +274,19 @@ bun run package:release
 ONE_CLAW_RELEASE_PLATFORM=linux ONE_CLAW_RELEASE_ARCH=x64 bun run package:release
 ```
 
+Linux 产物会同时生成 `.tar.gz`、`.zip` 和 `.deb`。
+
 解压后直接运行：
 
 ```bash
 ./bin/one
+```
+
+Ubuntu / Debian 安装：
+
+```bash
+sudo apt install ./release/one-claw_1.0_amd64.deb
+one --version
 ```
 
 ### 类型检查

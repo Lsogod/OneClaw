@@ -32,6 +32,20 @@ detect_arch() {
   esac
 }
 
+normalize_deb_arch() {
+  case "$1" in
+    x64)
+      printf '%s\n' "amd64"
+      ;;
+    arm64)
+      printf '%s\n' "arm64"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 VERSION="${ONE_CLAW_RELEASE_VERSION:-1.0}"
 PLATFORM="${ONE_CLAW_RELEASE_PLATFORM:-$(detect_platform)}"
 ARCH="${ONE_CLAW_RELEASE_ARCH:-$(detect_arch)}"
@@ -40,6 +54,86 @@ OUT_DIR="$ROOT/release"
 STAGE_DIR="$OUT_DIR/$NAME"
 ARCHIVE_TGZ="$OUT_DIR/${NAME}.tar.gz"
 ARCHIVE_ZIP="$OUT_DIR/${NAME}.zip"
+DEB_ARCHIVE=""
+
+create_linux_deb() {
+  if [[ "$PLATFORM" != "linux" ]]; then
+    return 0
+  fi
+
+  local deb_arch
+  if ! deb_arch="$(normalize_deb_arch "$ARCH")"; then
+    echo "Skipping .deb packaging for unsupported Linux architecture: $ARCH" >&2
+    return 0
+  fi
+
+  local deb_package_name="${ONE_CLAW_DEB_PACKAGE_NAME:-one-claw}"
+  local deb_version="${ONE_CLAW_DEB_VERSION:-$VERSION}"
+  local deb_maintainer="${ONE_CLAW_DEB_MAINTAINER:-Lsogod <opensource@one-claw.local>}"
+  local deb_build_root="$OUT_DIR/.deb-build/$NAME"
+  local control_dir="$deb_build_root/control"
+  local data_dir="$deb_build_root/data"
+  local install_dir="$data_dir/opt/$deb_package_name"
+  local installed_size
+
+  DEB_ARCHIVE="$OUT_DIR/${deb_package_name}_${deb_version}_${deb_arch}.deb"
+
+  rm -rf "$deb_build_root"
+  mkdir -p "$control_dir" "$install_dir" "$data_dir/usr/bin"
+
+  cp -R "$STAGE_DIR"/. "$install_dir/"
+
+  cat > "$data_dir/usr/bin/one" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec /opt/$deb_package_name/bin/one "\$@"
+EOF
+  chmod 755 "$data_dir/usr/bin/one"
+
+  installed_size="$(du -sk "$data_dir" | awk '{print $1}')"
+
+  cat > "$control_dir/control" <<EOF
+Package: $deb_package_name
+Version: $deb_version
+Section: utils
+Priority: optional
+Architecture: $deb_arch
+Maintainer: $deb_maintainer
+Depends: bash, curl
+Homepage: https://github.com/Lsogod/OneClaw
+Installed-Size: $installed_size
+Description: One Claw terminal AI coding assistant
+ One Claw is a terminal AI coding assistant wired to Codex via a local
+ Anthropic-compatible adapter.
+ .
+ bun and the codex CLI must be installed separately before running one.
+EOF
+
+  printf '2.0\n' > "$deb_build_root/debian-binary"
+
+  (
+    cd "$control_dir"
+    tar -czf "$deb_build_root/control.tar.gz" \
+      --uid 0 --gid 0 --uname root --gname root \
+      .
+  )
+
+  (
+    cd "$data_dir"
+    tar -czf "$deb_build_root/data.tar.gz" \
+      --uid 0 --gid 0 --uname root --gname root \
+      .
+  )
+
+  rm -f "$DEB_ARCHIVE"
+  (
+    cd "$deb_build_root"
+    ar -cr "$DEB_ARCHIVE" debian-binary control.tar.gz data.tar.gz
+  )
+
+  rm -rf "$deb_build_root"
+}
 
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/dist" "$OUT_DIR"
@@ -226,6 +320,11 @@ chmod +x "$STAGE_DIR/bin/one"
   zip -qr "$ARCHIVE_ZIP" "$NAME"
 )
 
+create_linux_deb
+
 echo "Created release artifacts:"
 echo "  $ARCHIVE_TGZ"
 echo "  $ARCHIVE_ZIP"
+if [[ -n "$DEB_ARCHIVE" ]]; then
+  echo "  $DEB_ARCHIVE"
+fi
