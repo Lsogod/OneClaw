@@ -8,6 +8,7 @@ import { errorMessage, isENOENT } from './errors.js'
 import { getFsImplementation } from './fsOperations.js'
 import { readJSONLFile } from './json.js'
 import { SYNTHETIC_MODEL } from './messages.js'
+import { getAPIProvider, type APIProvider } from './model/providers.js'
 import { getProjectsDir, isTranscriptMessage } from './sessionStorage.js'
 import { SHELL_TOOL_NAMES } from './shell/shellToolUtils.js'
 import { jsonParse } from './slowOperations.js'
@@ -108,6 +109,57 @@ type ProcessOptions = {
   fromDate?: string
   // Only include data from dates <= this date (YYYY-MM-DD format)
   toDate?: string
+  // Only include sessions/messages matching the current provider
+  provider?: APIProvider
+}
+
+function modelMatchesStatsProvider(
+  model: string | null | undefined,
+  provider: APIProvider | undefined,
+): boolean {
+  if (!provider || !model) {
+    return true
+  }
+
+  const normalized = model.toLowerCase()
+
+  switch (provider) {
+    case 'codex':
+      return /^(gpt-|o1|o3|o4|codex)/.test(normalized)
+    case 'firstParty':
+      return normalized.startsWith('claude')
+    default:
+      return true
+  }
+}
+
+function sessionMatchesStatsProvider(
+  messages: TranscriptMessage[],
+  provider: APIProvider | undefined,
+): boolean {
+  if (!provider || (provider !== 'codex' && provider !== 'firstParty')) {
+    return true
+  }
+
+  let sawAssistantModel = false
+
+  for (const message of messages) {
+    if (message.type !== 'assistant') {
+      continue
+    }
+
+    const model = message.message?.model
+    if (typeof model !== 'string' || model === SYNTHETIC_MODEL) {
+      continue
+    }
+
+    sawAssistantModel = true
+    if (modelMatchesStatsProvider(model, provider)) {
+      return true
+    }
+  }
+
+  return !sawAssistantModel
 }
 
 /**
@@ -118,7 +170,7 @@ async function processSessionFiles(
   sessionFiles: string[],
   options: ProcessOptions = {},
 ): Promise<ProcessedStats> {
-  const { fromDate, toDate } = options
+  const { fromDate, toDate, provider } = options
   const fs = getFsImplementation()
 
   const dailyActivityMap = new Map<string, DailyActivity>()
@@ -234,6 +286,7 @@ async function processSessionFiles(
         ? messages
         : messages.filter(m => !m.isSidechain)
       if (mainMessages.length === 0) continue
+      if (!sessionMatchesStatsProvider(mainMessages, provider)) continue
 
       const firstMessage = mainMessages[0]!
       const lastMessage = mainMessages.at(-1)!
@@ -312,6 +365,9 @@ async function processSessionFiles(
 
             // Skip synthetic messages - they are internal and shouldn't appear in stats
             if (model === SYNTHETIC_MODEL) {
+              continue
+            }
+            if (!modelMatchesStatsProvider(model, provider)) {
               continue
             }
 
@@ -639,9 +695,17 @@ function cacheToStats(
  */
 export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
   const allSessionFiles = await getAllSessionFiles()
+  const provider = getAPIProvider()
 
   if (allSessionFiles.length === 0) {
     return getEmptyStats()
+  }
+
+  if (provider === 'codex') {
+    const stats = await processSessionFiles(allSessionFiles, {
+      provider,
+    })
+    return processedStatsToClaudeCodeStats(stats)
   }
 
   // Use lock to prevent race conditions with background cache updates
@@ -660,6 +724,7 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
       logForDebugging('Stats cache empty, processing all historical data')
       const historicalStats = await processSessionFiles(allSessionFiles, {
         toDate: yesterday,
+        provider,
       })
 
       if (
@@ -679,6 +744,7 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
       const newStats = await processSessionFiles(allSessionFiles, {
         fromDate: nextDay,
         toDate: yesterday,
+        provider,
       })
 
       if (
@@ -703,6 +769,7 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
   const todayStats = await processSessionFiles(allSessionFiles, {
     fromDate: today,
     toDate: today,
+    provider,
   })
 
   // Combine cache with today's stats
@@ -718,6 +785,7 @@ export type StatsDateRange = '7d' | '30d' | 'all'
 export async function aggregateClaudeCodeStatsForRange(
   range: StatsDateRange,
 ): Promise<ClaudeCodeStats> {
+  const provider = getAPIProvider()
   if (range === 'all') {
     return aggregateClaudeCodeStats()
   }
@@ -737,6 +805,7 @@ export async function aggregateClaudeCodeStatsForRange(
   // Process session files for the date range
   const stats = await processSessionFiles(allSessionFiles, {
     fromDate: fromDateStr,
+    provider,
   })
 
   return processedStatsToClaudeCodeStats(stats)

@@ -12,14 +12,18 @@ import { Dialog } from '../../components/design-system/Dialog.js'
 import { useMainLoopModel } from '../../hooks/useMainLoopModel.js'
 import { Text } from '../../ink.js'
 import { refreshGrowthBookAfterAuthChange } from '../../services/analytics/growthbook.js'
-import { loginWithCodexCli } from '../../services/codex/auth.js'
+import { loginWithCodexCliWithOptions } from '../../services/codex/auth.js'
 import { refreshPolicyLimits } from '../../services/policyLimits/index.js'
 import { refreshRemoteManagedSettings } from '../../services/remoteManagedSettings/index.js'
 import type { LocalJSXCommandOnDone } from '../../types/command.js'
 import { errorMessage } from '../../utils/errors.js'
 import { logError } from '../../utils/log.js'
 import { stripSignatureBlocks } from '../../utils/messages.js'
-import { isCodexProvider } from '../../utils/model/providers.js'
+import {
+  getCodexOpenAIApiKeyEnvVar,
+  getCodexPreferredAuthMode,
+  isCodexProvider,
+} from '../../utils/model/providers.js'
 import {
   checkAndDisableAutoModeIfNeeded,
   checkAndDisableBypassPermissionsIfNeeded,
@@ -83,7 +87,10 @@ export async function call(
 ): Promise<React.ReactNode | null> {
   if (isCodexProvider()) {
     try {
-      await loginWithCodexCli()
+      await loginWithCodexCliWithOptions({
+        mode: getCodexPreferredAuthMode(),
+        apiKeyEnvVar: getCodexOpenAIApiKeyEnvVar(),
+      })
       finalizeLoginSuccess(context)
       onDone('Login successful')
     } catch (error) {

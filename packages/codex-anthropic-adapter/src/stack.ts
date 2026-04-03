@@ -2,6 +2,7 @@ import { getCodexAppServerUrl } from './config.js'
 import { dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
+import { getCodexAppServerConfigOverrides } from '../../../utils/model/providers.js'
 
 function getBunBinary(): string {
   return Bun.which('bun') || process.execPath
@@ -35,12 +36,17 @@ function spawnManagedProcess(label: string, cmd: string[]): Bun.Subprocess {
 }
 
 async function main(): Promise<void> {
-  const appServer = spawnManagedProcess('codex app-server', [
+  const appServerArgs = [
     'codex',
     'app-server',
     '--listen',
     getCodexAppServerUrl(),
-  ])
+  ]
+  for (const override of getCodexAppServerConfigOverrides()) {
+    appServerArgs.push('-c', override)
+  }
+
+  const appServer = spawnManagedProcess('codex app-server', appServerArgs)
 
   const adapter = spawnManagedProcess('codex adapter', [
     getBunBinary(),

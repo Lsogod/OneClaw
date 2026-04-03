@@ -5,8 +5,9 @@ import {
   performLogout,
 } from '../../commands/logout/logout.js'
 import {
+  getCodexAuthModeDisplayName,
   getCodexLoginStatus,
-  loginWithCodexCli,
+  loginWithCodexCliWithOptions,
   logoutFromCodexCli,
 } from '../../services/codex/auth.js'
 import {
@@ -43,18 +44,79 @@ import { logError } from '../../utils/log.js'
 import {
   getAPIProvider,
   getAPIProviderDisplayName,
+  getCodexOpenAIBaseUrl,
   isCodexProvider,
+  normalizeCodexAuthMode,
 } from '../../utils/model/providers.js'
-import { getInitialSettings } from '../../utils/settings/settings.js'
+import {
+  getInitialSettings,
+  updateSettingsForSource,
+} from '../../utils/settings/settings.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import {
   buildAccountProperties,
   buildAPIProviderProperties,
 } from '../../utils/status.js'
 
-async function authLoginWithCodex(): Promise<void> {
+function persistCodexLoginPreferences(options: {
+  mode?: string
+  baseUrl?: string
+  apiKeyEnvVar?: string
+}): void {
+  const authMode = normalizeCodexAuthMode(options.mode)
+  if (!authMode) {
+    return
+  }
+
+  const trimmedBaseUrl = options.baseUrl?.trim()
+  const trimmedApiKeyEnvVar = options.apiKeyEnvVar?.trim()
+  const codexSettings: {
+    authMode: 'chatgpt' | 'apiKey'
+    openaiBaseUrl?: string
+    openaiApiKeyEnvVar?: string
+  } = {
+    authMode: authMode === 'api_key' ? 'apiKey' : 'chatgpt',
+    ...(trimmedApiKeyEnvVar
+      ? { openaiApiKeyEnvVar: trimmedApiKeyEnvVar }
+      : {}),
+    ...(options.baseUrl !== undefined
+      ? { openaiBaseUrl: trimmedBaseUrl || undefined }
+      : authMode === 'chatgpt'
+        ? { openaiBaseUrl: undefined }
+        : {}),
+  }
+
+  updateSettingsForSource('userSettings', {
+    provider: 'codex',
+    codex: codexSettings,
+  })
+}
+
+async function authLoginWithCodex(options: {
+  chatgpt?: boolean
+  apiKey?: boolean
+  apiKeyEnv?: string
+  baseUrl?: string
+}): Promise<void> {
+  if (options.chatgpt && options.apiKey) {
+    process.stderr.write(
+      'Error: --chatgpt and --api-key cannot be used together.\n',
+    )
+    process.exit(1)
+  }
+
+  const mode = options.apiKey ? 'api_key' : 'chatgpt'
+
   try {
-    await loginWithCodexCli()
+    await loginWithCodexCliWithOptions({
+      mode,
+      apiKeyEnvVar: options.apiKeyEnv,
+    })
+    persistCodexLoginPreferences({
+      mode,
+      baseUrl: options.baseUrl,
+      apiKeyEnvVar: options.apiKeyEnv,
+    })
     process.exit(0)
   } catch (err) {
     logError(err)
@@ -72,7 +134,7 @@ async function authStatusWithCodex(opts: {
   if (opts.text) {
     process.stdout.write(`API provider: ${getAPIProviderDisplayName()}\n`)
     process.stdout.write(
-      `Login method: ${status.authMode ? `Codex (${status.authMode})` : 'Codex'}\n`,
+      `Login method: ${getCodexAuthModeDisplayName(status.authMode)}\n`,
     )
     if (status.plan) {
       process.stdout.write(`Plan: ${status.plan}\n`)
@@ -87,6 +149,10 @@ async function authStatusWithCodex(opts: {
     }
     if (status.lastRefresh) {
       process.stdout.write(`Token last refresh: ${status.lastRefresh}\n`)
+    }
+    const openaiBaseUrl = getCodexOpenAIBaseUrl()
+    if (openaiBaseUrl) {
+      process.stdout.write(`OpenAI base URL: ${openaiBaseUrl}\n`)
     }
     if (status.organizationTitle) {
       process.stdout.write(`Organization: ${status.organizationTitle}\n`)
@@ -112,6 +178,7 @@ async function authStatusWithCodex(opts: {
           loggedIn: status.loggedIn,
           authMethod: status.authMode ?? 'codex',
           apiProvider: getAPIProvider(),
+          openaiBaseUrl: getCodexOpenAIBaseUrl(),
           name: status.name,
           email: status.email,
           accountId: status.accountId,
@@ -221,14 +288,27 @@ export async function authLogin({
   sso,
   console: useConsole,
   claudeai,
+  chatgpt,
+  apiKey,
+  apiKeyEnv,
+  baseUrl,
 }: {
   email?: string
   sso?: boolean
   console?: boolean
   claudeai?: boolean
+  chatgpt?: boolean
+  apiKey?: boolean
+  apiKeyEnv?: string
+  baseUrl?: string
 }): Promise<void> {
   if (isCodexProvider()) {
-    await authLoginWithCodex()
+    await authLoginWithCodex({
+      chatgpt,
+      apiKey,
+      apiKeyEnv,
+      baseUrl,
+    })
     return
   }
 

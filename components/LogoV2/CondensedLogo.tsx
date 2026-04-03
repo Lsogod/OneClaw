@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useEffect, useState } from 'react'
 import { Box, Text } from '../../ink.js'
+import { useTerminalSize } from '../../hooks/useTerminalSize.js'
 import { useAppState } from '../../state/AppState.js'
 import { truncate } from '../../utils/format.js'
 import { getEffortSuffix } from '../../utils/effort.js'
@@ -21,6 +22,7 @@ import {
   useShowOverageCreditUpsell,
 } from './OverageCreditUpsell.js'
 
+const LOGO_COLOR = 'rgb(255,85,60)'
 const SUBTLE_COLOR = 'ansi256(243)'
 const F = '\x1b[38;2;255;85;60m'
 const B = '\x1b[48;2;255;85;60m'
@@ -34,6 +36,7 @@ const ART_LINES = [
 ]
 
 export function CondensedLogo(): React.ReactNode {
+  const { columns } = useTerminalSize()
   const effortValue = useAppState(s => s.effortValue)
   const [displayData, setDisplayData] = useState(() => getLogoDisplayData())
   const { version, cwd, billingType, accountLabel } = displayData
@@ -79,9 +82,25 @@ export function CondensedLogo(): React.ReactNode {
     }
   }, [])
 
+  const borderTitle = {
+    content: ` \x1b[38;2;255;85;60m\x1b[1mOne Claw\x1b[0m \x1b[2mv${version}\x1b[0m `,
+    position: 'top' as const,
+    align: 'start' as const,
+    offset: 1,
+  }
+
   return (
     <OffscreenFreeze>
-      <Box flexDirection="row" gap={3} alignItems="flex-start">
+      <Box
+        flexDirection="row"
+        gap={3}
+        alignItems="flex-start"
+        borderStyle="round"
+        borderColor={LOGO_COLOR}
+        borderText={borderTitle}
+        paddingX={1}
+        paddingY={1}
+      >
         <Box flexDirection="column">
           {ART_LINES.map(line => (
             <Text key={line}>
@@ -90,10 +109,6 @@ export function CondensedLogo(): React.ReactNode {
           ))}
         </Box>
         <Box flexDirection="column">
-          <Text>
-            <Text bold>One Claw</Text>{' '}
-            <Text color={SUBTLE_COLOR}>v{version}</Text>
-          </Text>
           <Text color={SUBTLE_COLOR}>{modelAndBilling}</Text>
           <Text color={SUBTLE_COLOR}>{cwdLabel}</Text>
           {accountLine ? <Text color={SUBTLE_COLOR}>{accountLine}</Text> : null}

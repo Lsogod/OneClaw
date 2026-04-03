@@ -17,6 +17,7 @@ import { getGlobalConfig } from '../utils/config.js';
 import { formatDuration, formatNumber } from '../utils/format.js';
 import { generateHeatmap } from '../utils/heatmap.js';
 import { renderModelName } from '../utils/model/model.js';
+import { getAPIProvider, type APIProvider } from '../utils/model/providers.js';
 import { copyAnsiToClipboard } from '../utils/screenshotClipboard.js';
 import { aggregateClaudeCodeStatsForRange, type ClaudeCodeStats, type DailyModelTokens, type StatsDateRange } from '../utils/stats.js';
 import { resolveThemeSetting } from '../utils/systemTheme.js';
@@ -30,6 +31,36 @@ function formatPeakDay(dateStr: string): string {
     month: 'short',
     day: 'numeric'
   });
+}
+
+function modelMatchesProvider(model: string, provider: APIProvider): boolean {
+  const normalized = model.toLowerCase();
+  switch (provider) {
+    case 'codex':
+      return /^(gpt-|o1|o3|o4|codex)/.test(normalized);
+    case 'firstParty':
+      return normalized.startsWith('claude');
+    default:
+      return true;
+  }
+}
+
+function getScopedModelEntries(stats: ClaudeCodeStats): [string, ClaudeCodeStats['modelUsage'][string]][] {
+  const provider = getAPIProvider();
+  const allEntries = Object.entries(stats.modelUsage).sort(([, a], [, b]) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens));
+  if (provider !== 'codex' && provider !== 'firstParty') {
+    return allEntries;
+  }
+  const filteredEntries = allEntries.filter(([model]) => modelMatchesProvider(model, provider));
+  return filteredEntries.length > 0 ? filteredEntries : allEntries;
+}
+
+function getScopedDailyModelTokens(stats: ClaudeCodeStats, modelEntries: [string, ClaudeCodeStats['modelUsage'][string]][]): DailyModelTokens[] {
+  const allowedModels = new Set(modelEntries.map(([model]) => model));
+  return stats.dailyModelTokens.map(day => ({
+    ...day,
+    tokensByModel: Object.fromEntries(Object.entries(day.tokensByModel).filter(([model]) => allowedModels.has(model)))
+  })).filter(day => Object.keys(day.tokensByModel).length > 0);
 }
 type Props = {
   onClose: (result?: string, options?: {
@@ -369,7 +400,7 @@ function OverviewTab({
   } = useTerminalSize();
 
   // Calculate favorite model and total tokens
-  const modelEntries = Object.entries(stats.modelUsage).sort(([, a], [, b]) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens));
+  const modelEntries = getScopedModelEntries(stats);
   const favoriteModel = modelEntries[0];
   const totalTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens + usage.outputTokens, 0);
 
@@ -728,7 +759,7 @@ function ModelsTab(t0) {
   const {
     columns: terminalWidth
   } = useTerminalSize();
-  const modelEntries = Object.entries(stats.modelUsage).sort(_temp7);
+  const modelEntries = getScopedModelEntries(stats);
   const t1 = !headerFocused;
   let t2;
   if ($[0] !== t1) {
@@ -763,7 +794,7 @@ function ModelsTab(t0) {
     return t3;
   }
   const totalTokens = modelEntries.reduce(_temp9, 0);
-  const chartOutput = generateTokenChart(stats.dailyModelTokens, modelEntries.map(_temp0), terminalWidth);
+  const chartOutput = generateTokenChart(getScopedDailyModelTokens(stats, modelEntries), modelEntries.map(_temp0), terminalWidth);
   const visibleModels = modelEntries.slice(scrollOffset, scrollOffset + 4);
   const midpoint = Math.ceil(visibleModels.length / 2);
   const leftModels = visibleModels.slice(0, midpoint);
@@ -1127,7 +1158,7 @@ function renderOverviewToAnsi(stats: ClaudeCodeStats): string[] {
   }
 
   // Calculate values
-  const modelEntries = Object.entries(stats.modelUsage).sort(([, a], [, b]) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens));
+  const modelEntries = getScopedModelEntries(stats);
   const favoriteModel = modelEntries[0];
   const totalTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens + usage.outputTokens, 0);
 
@@ -1190,7 +1221,7 @@ function renderOverviewToAnsi(stats: ClaudeCodeStats): string[] {
 }
 function renderModelsToAnsi(stats: ClaudeCodeStats): string[] {
   const lines: string[] = [];
-  const modelEntries = Object.entries(stats.modelUsage).sort(([, a], [, b]) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens));
+  const modelEntries = getScopedModelEntries(stats);
   if (modelEntries.length === 0) {
     lines.push(chalk.gray('No model usage data available'));
     return lines;
@@ -1199,7 +1230,7 @@ function renderModelsToAnsi(stats: ClaudeCodeStats): string[] {
   const totalTokens = modelEntries.reduce((sum, [, usage]) => sum + usage.inputTokens + usage.outputTokens, 0);
 
   // Generate chart if we have data - use fixed width for screenshot
-  const chartOutput = generateTokenChart(stats.dailyModelTokens, modelEntries.map(([model]) => model), 80 // Fixed width for screenshot
+  const chartOutput = generateTokenChart(getScopedDailyModelTokens(stats, modelEntries), modelEntries.map(([model]) => model), 80 // Fixed width for screenshot
   );
   if (chartOutput) {
     lines.push(chalk.bold('Tokens per Day'));

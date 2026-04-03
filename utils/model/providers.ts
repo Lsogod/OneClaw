@@ -16,6 +16,62 @@ export type ProviderSetting =
   | 'foundry'
   | 'codex'
 
+export type CodexAuthMode = 'chatgpt' | 'api_key'
+
+const ONE_CLAW_OPENAI_COMPAT_PROVIDER_ID = 'one_claw_openai_compatible'
+
+function getConfiguredCodexSettings():
+  | {
+      authMode?: string
+      openaiBaseUrl?: string
+      openaiApiKeyEnvVar?: string
+    }
+  | undefined {
+  try {
+    return getSettings_DEPRECATED()?.codex as
+      | {
+          authMode?: string
+          openaiBaseUrl?: string
+          openaiApiKeyEnvVar?: string
+        }
+      | undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function normalizeCodexAuthMode(
+  value: string | undefined | null,
+): CodexAuthMode | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  switch (value.trim().toLowerCase()) {
+    case 'chatgpt':
+      return 'chatgpt'
+    case 'api':
+    case 'apikey':
+    case 'api-key':
+    case 'api_key':
+      return 'api_key'
+    default:
+      return undefined
+  }
+}
+
+export function getCodexPreferredAuthMode(): CodexAuthMode {
+  const envMode = normalizeCodexAuthMode(process.env.ONE_CLAW_CODEX_AUTH_MODE)
+  if (envMode) {
+    return envMode
+  }
+
+  const settingsMode = normalizeCodexAuthMode(
+    getConfiguredCodexSettings()?.authMode,
+  )
+  return settingsMode ?? 'chatgpt'
+}
+
 function normalizeProviderSetting(
   value: string | undefined,
 ): APIProvider | undefined {
@@ -92,6 +148,48 @@ export function getCodexAdapterApiKey(): string {
     process.env.CODEX_ADAPTER_API_KEY ||
     'codex-local'
   )
+}
+
+export function getCodexOpenAIBaseUrl(): string | null {
+  const value =
+    process.env.ONE_CLAW_OPENAI_BASE_URL ||
+    process.env.CLAUDE_CODE_OPENAI_BASE_URL ||
+    getConfiguredCodexSettings()?.openaiBaseUrl ||
+    process.env.OPENAI_BASE_URL
+
+  return value?.trim() || null
+}
+
+export function getCodexOpenAIApiKeyEnvVar(): string {
+  const value =
+    process.env.ONE_CLAW_OPENAI_API_KEY_ENV ||
+    getConfiguredCodexSettings()?.openaiApiKeyEnvVar
+
+  return value?.trim() || 'OPENAI_API_KEY'
+}
+
+export function getCodexModelProviderId(): string {
+  return getCodexOpenAIBaseUrl()
+    ? ONE_CLAW_OPENAI_COMPAT_PROVIDER_ID
+    : 'openai'
+}
+
+export function getCodexAppServerConfigOverrides(): string[] {
+  const baseUrl = getCodexOpenAIBaseUrl()
+  if (!baseUrl) {
+    return []
+  }
+
+  const providerId = getCodexModelProviderId()
+  return [
+    `model_provider=${JSON.stringify(providerId)}`,
+    `model_providers.${providerId}.name=${JSON.stringify(
+      'One Claw OpenAI-Compatible',
+    )}`,
+    `model_providers.${providerId}.base_url=${JSON.stringify(baseUrl)}`,
+    `model_providers.${providerId}.requires_openai_auth=true`,
+    `model_providers.${providerId}.wire_api=${JSON.stringify('responses')}`,
+  ]
 }
 
 export function getAPIProviderDisplayName(

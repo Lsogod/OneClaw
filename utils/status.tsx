@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import figures from 'figures';
 import * as React from 'react';
 import { color, Text } from '../ink.js';
-import { getCodexAuthSnapshot } from '../services/codex/auth.js';
+import { getCodexAuthModeDisplayName, getCodexAuthSnapshot } from '../services/codex/auth.js';
 import type { MCPServerConnection } from '../services/mcp/types.js';
 import { getAccountInformation, isClaudeAISubscriber } from './auth.js';
 import { getLargeMemoryFiles, getMemoryFiles, MAX_MEMORY_CHARACTER_COUNT } from './claudemd.js';
@@ -12,7 +12,7 @@ import { getDisplayPath } from './file.js';
 import { formatNumber } from './format.js';
 import { getIdeClientName, type IDEExtensionInstallationStatus, isJetBrainsIde, toIDEDisplayName } from './ide.js';
 import { getClaudeAiUserDefaultModelDescription, modelDisplayString } from './model/model.js';
-import { getAPIProvider, getAPIProviderDisplayName } from './model/providers.js';
+import { getAPIProvider, getAPIProviderDisplayName, getCodexOpenAIBaseUrl } from './model/providers.js';
 import { getMTLSConfig } from './mtls.js';
 import { checkInstall } from './nativeInstaller/index.js';
 import { getProxyUrl } from './proxy.js';
@@ -203,9 +203,14 @@ export function buildAccountProperties(): Property[] {
     const snapshot = getCodexAuthSnapshot();
     const properties: Property[] = [{
       label: 'Login method',
-      value: snapshot.authMode ? `Codex (${snapshot.authMode})` : 'Codex'
+      value: getCodexAuthModeDisplayName(snapshot.authMode)
     }];
-    if (snapshot.plan) {
+    if (snapshot.authMode === 'api_key') {
+      properties.push({
+        label: 'Billing',
+        value: 'API usage billing'
+      });
+    } else if (snapshot.plan) {
       properties.push({
         label: 'Plan',
         value: snapshot.plan
@@ -372,6 +377,13 @@ export function buildAPIProviderProperties(): Property[] {
       label: 'Adapter base URL',
       value: process.env.CLAUDE_CODE_CODEX_ADAPTER_BASE_URL || process.env.CODEX_ADAPTER_BASE_URL || 'http://127.0.0.1:4317'
     });
+    const openaiBaseUrl = getCodexOpenAIBaseUrl();
+    if (openaiBaseUrl) {
+      properties.push({
+        label: 'OpenAI-compatible base URL',
+        value: openaiBaseUrl
+      });
+    }
   }
   const proxyUrl = getProxyUrl();
   if (proxyUrl) {

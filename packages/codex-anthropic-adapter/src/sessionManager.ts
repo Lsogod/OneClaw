@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'crypto'
 import { CodexAppServerClient } from './codexAppServerClient.js'
 import { getCodexAppServerUrl } from './config.js'
+import { getCodexModelProviderId } from '../../../utils/model/providers.js'
 
 type AnthropicTextBlock = {
   type: 'text'
@@ -212,7 +213,7 @@ async function startThread(params: {
     approvalPolicy: 'never',
     sandbox: 'danger-full-access',
     model: params.model,
-    modelProvider: 'openai',
+    modelProvider: getCodexModelProviderId(),
     serviceName: 'claude-code-codex-adapter',
     baseInstructions: params.systemPrompt ?? null,
     developerInstructions: params.systemPrompt ?? null,

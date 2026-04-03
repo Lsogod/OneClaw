@@ -1,6 +1,9 @@
 import { getDirectConnectServerUrl, getSessionId } from '../bootstrap/state.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { getCodexAuthSnapshot } from '../services/codex/auth.js'
+import {
+  getCodexAuthModeDisplayName,
+  getCodexAuthSnapshot,
+} from '../services/codex/auth.js'
 import type { LogOption } from '../types/logs.js'
 import { getSubscriptionName, isClaudeAISubscriber } from './auth.js'
 import { getCwd } from './cwd.js'
@@ -284,7 +287,7 @@ export function getLogoDisplayData(): {
 function getCodexBillingType(
   snapshot: ReturnType<typeof getCodexAuthSnapshot> | null = getCodexAuthSnapshot(),
 ): string {
-  const mode = snapshot.authMode ? snapshot.authMode.toUpperCase() : 'CODEX'
+  const mode = getCodexAuthModeDisplayName(snapshot?.authMode)
 
   if (!snapshot.plan) {
     return mode

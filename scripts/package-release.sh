@@ -46,7 +46,7 @@ normalize_deb_arch() {
   esac
 }
 
-VERSION="${ONE_CLAW_RELEASE_VERSION:-1.0}"
+VERSION="${ONE_CLAW_RELEASE_VERSION:-1.0.2}"
 PLATFORM="${ONE_CLAW_RELEASE_PLATFORM:-$(detect_platform)}"
 ARCH="${ONE_CLAW_RELEASE_ARCH:-$(detect_arch)}"
 NAME="one-claw-v${VERSION}-${PLATFORM}-${ARCH}"

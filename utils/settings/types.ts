@@ -385,6 +385,12 @@ export const SettingsSchema = lazySchema(() =>
         .describe('Override the default model used by Claude Code'),
       codex: z
         .object({
+          authMode: z
+            .enum(['chatgpt', 'apiKey'])
+            .optional()
+            .describe(
+              'Preferred OpenAI authentication mode for Codex-backed sessions: ChatGPT subscription or API key.',
+            ),
           adapterBaseUrl: z
             .string()
             .optional()
@@ -396,6 +402,18 @@ export const SettingsSchema = lazySchema(() =>
             .optional()
             .describe(
               'Transport URL for codex app-server, typically "ws://127.0.0.1:4318".',
+            ),
+          openaiBaseUrl: z
+            .string()
+            .optional()
+            .describe(
+              'OpenAI-compatible Responses API base URL to use through Codex, e.g. a proxy or relay endpoint.',
+            ),
+          openaiApiKeyEnvVar: z
+            .string()
+            .optional()
+            .describe(
+              'Environment variable name to read when running `one auth login --api-key`.',
             ),
           modelOverrides: z
             .record(z.string(), z.string())

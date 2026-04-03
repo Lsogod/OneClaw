@@ -4109,11 +4109,26 @@ async function run(): Promise<CommanderCommand> {
   const auth = program.command('auth').description('Manage authentication').configureHelp(createSortedHelpConfig());
   const authLogin = auth.command('login').description(`Sign in to your ${getAPIProviderDisplayName()} account`);
   if (isCodexProvider()) {
-    authLogin.action(async () => {
+    authLogin.option('--chatgpt', 'Use ChatGPT subscription login (default)').option('--api-key', 'Use OpenAI API key login').option('--api-key-env <name>', 'Read the OpenAI API key from this environment variable (default: OPENAI_API_KEY)').option('--base-url <url>', 'Use an OpenAI-compatible Responses API base URL for future Codex sessions').action(async ({
+      chatgpt,
+      apiKey,
+      apiKeyEnv,
+      baseUrl
+    }: {
+      chatgpt?: boolean;
+      apiKey?: boolean;
+      apiKeyEnv?: string;
+      baseUrl?: string;
+    }) => {
       const {
         authLogin
       } = await import('./cli/handlers/auth.js');
-      await authLogin({});
+      await authLogin({
+        chatgpt,
+        apiKey,
+        apiKeyEnv,
+        baseUrl
+      });
     });
   } else {
     authLogin.option('--email <email>', 'Pre-populate email address on the login page').option('--sso', 'Force SSO login flow').option('--console', 'Use Anthropic Console (API usage billing) instead of One subscription').option('--claudeai', 'Use One subscription (default)').action(async ({

@@ -1,5 +1,9 @@
 import { randomUUID } from 'crypto'
 import { getCodexLoginStatus } from '../../../services/codex/auth.js'
+import {
+  getCodexModelProviderId,
+  getCodexOpenAIBaseUrl,
+} from '../../../utils/model/providers.js'
 import { getAdapterApiKey, getAdapterBaseUrl, getAdapterHost, getAdapterPort, getCodexAppServerUrl } from './config.js'
 import { CodexAppServerClient } from './codexAppServerClient.js'
 import { getAdapterSession } from './sessionManager.js'
@@ -405,6 +409,8 @@ async function handleHealth(): Promise<Response> {
     adapterBaseUrl: getAdapterBaseUrl(),
     adapterApiKey: getAdapterApiKey(),
     codexAppServerUrl: getCodexAppServerUrl(),
+    codexModelProvider: getCodexModelProviderId(),
+    codexOpenAIBaseUrl: getCodexOpenAIBaseUrl(),
     codexAuth: {
       loggedIn: auth.loggedIn,
       authMode: auth.authMode,
