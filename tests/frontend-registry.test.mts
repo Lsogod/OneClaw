@@ -924,12 +924,15 @@ describe("Frontend command registry", () => {
       const validateResult = await validateLookup?.command.handler(validateLookup.args, context)
       const filesResult = await filesLookup?.command.handler(filesLookup.args, context)
       const removeResult = await removeLookup?.command.handler(removeLookup.args, context)
+      const filesPayload = JSON.parse(filesResult?.message ?? "{}") as {
+        files?: Array<{ path?: string }>
+      }
 
       const hookPath = join(workspace, ".oneclaw", "hooks.json")
       expect(initResult?.message).toContain(hookPath)
       expect(addResult?.message).toContain("mark-before")
       expect(validateResult?.message).toContain('"valid": true')
-      expect(filesResult?.message).toContain(hookPath)
+      expect((filesPayload.files ?? []).some(file => file.path === hookPath)).toBe(true)
       expect(removeResult?.message).toContain("Removed hook mark-before")
       expect((await readFile(hookPath, "utf8")).includes("mark-before")).toBe(false)
     } finally {
