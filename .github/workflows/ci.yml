@@ -44,7 +44,6 @@ jobs:
           - "3.11"
 
     env:
-      ONECLAW_PROVIDER: internal-test
       ONECLAW_HOME: ${{ github.workspace }}/.oneclaw-ci
 
     steps:
