@@ -336,6 +336,23 @@ export class KernelClient {
     return this.request<Record<string, unknown>>("memory", { sessionId })
   }
 
+  todo(sessionId: string) {
+    return this.request<Record<string, unknown>>("todo", { sessionId })
+  }
+
+  todoUpdate(sessionId: string, items: Array<Record<string, unknown>>) {
+    return this.request<Record<string, unknown>>("todo_update", { sessionId, items })
+  }
+
+  webFetch(url: string, options: { maxChars?: number; timeoutMs?: number } = {}) {
+    return this.request<{
+      url: string
+      status: number
+      contentType: string
+      text: string
+    }>("web_fetch", { url, ...options })
+  }
+
   mcp(options: { verbose?: boolean } = {}) {
     return this.request<Record<string, unknown>>("mcp", options)
   }

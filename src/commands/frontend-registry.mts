@@ -180,6 +180,12 @@ function extractVoiceKeyterms(text: string): string[] {
   return terms
 }
 
+function todoItemsFromPayload(payload: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(payload.items)
+    ? payload.items.filter(item => typeof item === "object" && item !== null) as Array<Record<string, unknown>>
+    : []
+}
+
 async function listSessions(
   context: FrontendCommandContext,
   scope: "project" | "all" = "project",
@@ -2198,6 +2204,32 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   })
 
   registry.register({
+    name: "fetch",
+    description: "Fetch a HTTP(S) URL through the kernel web_fetch tool",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const url = parts[0]
+      if (!url) {
+        return { message: "Usage: /fetch <url> [maxChars]" }
+      }
+      const maxChars = parts[1] ? Number.parseInt(parts[1], 10) : 8000
+      if (!Number.isFinite(maxChars) || maxChars < 256 || maxChars > 50000) {
+        return { message: "Usage: /fetch <url> [maxChars: 256-50000]" }
+      }
+      const result = await context.client.webFetch(url, { maxChars })
+      return {
+        message: [
+          `url: ${result.url}`,
+          `status: ${result.status}`,
+          `contentType: ${result.contentType}`,
+          "",
+          result.text,
+        ].join("\n"),
+      }
+    },
+  })
+
+  registry.register({
     name: "history",
     description: "Show current session message history",
     handler: async (_args, context) => {
@@ -2251,6 +2283,53 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       return {
         message: payload.session?.recentSummary || "No conversation content to summarize.",
       }
+    },
+  })
+
+  registry.register({
+    name: "todo",
+    description: "Show or manage the current session todo list",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts[0] ?? "list"
+      const payload = await context.client.todo(context.sessionId)
+      const items = todoItemsFromPayload(payload)
+      if (action === "list" || action === "show") {
+        return { message: pretty(payload) }
+      }
+      if (action === "add") {
+        const title = args.replace(/^add\s+/i, "").trim()
+        if (!title) {
+          return { message: "Usage: /todo add <title>" }
+        }
+        const nextId = `todo-${items.length + 1}`
+        const result = await context.client.todoUpdate(context.sessionId, [
+          ...items,
+          { id: nextId, title, status: "pending" },
+        ])
+        return { message: pretty(result) }
+      }
+      if (["pending", "start", "done", "block"].includes(action) && parts[1]) {
+        const status = action === "start"
+          ? "in_progress"
+          : action === "block"
+            ? "blocked"
+            : action
+        const updated = items.map(item => item.id === parts[1] ? { ...item, status } : item)
+        const result = await context.client.todoUpdate(context.sessionId, updated)
+        return { message: pretty(result) }
+      }
+      if (action === "remove" && parts[1]) {
+        const result = await context.client.todoUpdate(
+          context.sessionId,
+          items.filter(item => item.id !== parts[1]),
+        )
+        return { message: pretty(result) }
+      }
+      if (action === "clear") {
+        return { message: pretty(await context.client.todoUpdate(context.sessionId, [])) }
+      }
+      return { message: "Usage: /todo [list|add <title>|pending <id>|start <id>|done <id>|block <id>|remove <id>|clear]" }
     },
   })
 

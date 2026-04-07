@@ -198,6 +198,18 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
         content: "global memory",
       },
     }),
+    todo: async () => ({
+      sessionId: "session_current",
+      count: 1,
+      byStatus: { pending: 1 },
+      items: [{ id: "todo-1", title: "existing task", status: "pending" }],
+    }),
+    todoUpdate: async (_sessionId: string, items: Array<Record<string, unknown>>) => ({
+      sessionId: "session_current",
+      count: items.length,
+      byStatus: {},
+      items,
+    }),
     hooks: async () => ({
       hooks: [{ name: "after_tool", event: "after_tool" }],
       plugins: [{ name: "sample-plugin" }],
@@ -238,6 +250,12 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       count: 2,
       bySource: { builtin: 2 },
       tools: [{ name: "read_file", source: "builtin" }],
+    }),
+    webFetch: async (url: string, options?: { maxChars?: number }) => ({
+      url,
+      status: 200,
+      contentType: "text/plain",
+      text: `fetched ${url} ${options?.maxChars ?? 8000}`,
     }),
     mcp: async () => ({
       statuses: [],
@@ -317,6 +335,8 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/branch")
     expect(helpText).toContain("/diff")
     expect(helpText).toContain("/files")
+    expect(helpText).toContain("/fetch")
+    expect(helpText).toContain("/todo")
     expect(helpText).toContain("/stats")
     expect(helpText).toContain("/observability")
     expect(helpText).toContain("/plan")
@@ -1420,6 +1440,46 @@ describe("Frontend command registry", () => {
 
     expect(result?.message).toContain("src")
     expect(result?.message).toContain("src/index.ts")
+  })
+
+  test("fetch and todo commands use kernel-backed management RPCs", async () => {
+    const registry = createFrontendCommandRegistry()
+    const fetchLookup = registry.lookup("/fetch https://example.test/page 1200")
+    const todoListLookup = registry.lookup("/todo")
+    const todoAddLookup = registry.lookup("/todo add write docs")
+    const todoDoneLookup = registry.lookup("/todo done todo-1")
+    const todoClearLookup = registry.lookup("/todo clear")
+    const updates: Array<Array<Record<string, unknown>>> = []
+
+    const context = {
+      client: createFakeClient({
+        todoUpdate: async (_sessionId: string, items: Array<Record<string, unknown>>) => {
+          updates.push(items)
+          return {
+            sessionId: "session_current",
+            count: items.length,
+            byStatus: {},
+            items,
+          }
+        },
+      }),
+      sessionId: "session_current",
+      cwd: "/tmp/workspace",
+    } as never
+
+    const fetchResult = await fetchLookup?.command.handler(fetchLookup.args, context)
+    const listResult = await todoListLookup?.command.handler(todoListLookup.args, context)
+    const addResult = await todoAddLookup?.command.handler(todoAddLookup.args, context)
+    const doneResult = await todoDoneLookup?.command.handler(todoDoneLookup.args, context)
+    const clearResult = await todoClearLookup?.command.handler(todoClearLookup.args, context)
+
+    expect(fetchResult?.message).toContain("https://example.test/page")
+    expect(fetchResult?.message).toContain("fetched")
+    expect(listResult?.message).toContain("existing task")
+    expect(addResult?.message).toContain("write docs")
+    expect(doneResult?.message).toContain("done")
+    expect(clearResult?.message).toContain("\"count\": 0")
+    expect(updates.length).toBe(3)
   })
 
   test("plan command runs a planning prompt in the current session", async () => {

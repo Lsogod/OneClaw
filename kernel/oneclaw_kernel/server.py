@@ -166,6 +166,19 @@ def main() -> int:
                 result = kernel.export_session_bundle(params["sessionId"])
             elif method == "memory":
                 result = kernel.memory_info(params["sessionId"])
+            elif method == "todo":
+                result = kernel.todo_info(params["sessionId"])
+            elif method == "todo_update":
+                result = kernel.todo_update(
+                    params["sessionId"],
+                    params.get("items") or [],
+                )
+            elif method == "web_fetch":
+                result = kernel.web_fetch(
+                    params["url"],
+                    int(params.get("maxChars") or 8000),
+                    int(params.get("timeoutMs") or 10000),
+                )
             elif method == "mcp":
                 result = kernel.mcp_info(bool(params.get("verbose")))
             elif method == "mcp_reconnect":

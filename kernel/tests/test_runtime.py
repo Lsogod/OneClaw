@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 from unittest import mock
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from oneclaw_kernel import sandbox
@@ -100,6 +101,52 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertEqual(kernel.compact_policy(session["id"])["sessionId"], session["id"])
             self.assertEqual(kernel.context_info(session["id"])["session"]["id"], session["id"])
             kernel.shutdown()
+
+    def test_todo_and_web_fetch_runtime_helpers(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            os.environ["ONECLAW_HOME"] = root
+            os.environ["ONECLAW_PROVIDER"] = "internal-test"
+
+            class Handler(BaseHTTPRequestHandler):
+                def do_GET(self) -> None:
+                    body = b"<html><body><h1>Hello Fetch</h1><p>OneClaw page</p></body></html>"
+                    self.send_response(200)
+                    self.send_header("content-type", "text/html; charset=utf-8")
+                    self.send_header("content-length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *_args: object) -> None:
+                    return
+
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                kernel = OneClawKernel(root)
+                session = kernel.create_session(root)
+                todo = kernel.todo_update(session["id"], [{
+                    "id": "todo-1",
+                    "title": "fetch docs",
+                    "status": "pending",
+                }])
+                self.assertEqual(todo["count"], 1)
+                self.assertEqual(kernel.todo_info(session["id"])["items"][0]["title"], "fetch docs")
+
+                url = f"http://127.0.0.1:{server.server_address[1]}/"
+                fetched = kernel.web_fetch(url, 1000)
+                self.assertEqual(fetched["status"], 200)
+                self.assertIn("Hello Fetch", fetched["text"])
+                tool_result = kernel._execute_tool({
+                    "name": "web_fetch",
+                    "input": {"url": url, "maxChars": 1000},
+                }, session)
+                self.assertTrue(tool_result["ok"])
+                self.assertIn("OneClaw page", tool_result["output"])
+                kernel.shutdown()
+            finally:
+                server.shutdown()
+                server.server_close()
 
     def test_internal_test_provider_emits_text_delta_events(self) -> None:
         with tempfile.TemporaryDirectory() as root:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import os
 import re
@@ -83,6 +84,15 @@ def limit_text(value: str, max_chars: int = 4000) -> str:
     if len(suffix) >= max_chars:
         return value[:max_chars]
     return f"{value[: max_chars - len(suffix)]}{suffix}"
+
+
+def html_to_text(value: str) -> str:
+    without_scripts = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", value)
+    with_breaks = re.sub(r"(?i)<\s*(br|p|div|li|tr|h[1-6])\b[^>]*>", "\n", without_scripts)
+    without_tags = re.sub(r"(?s)<[^>]+>", " ", with_breaks)
+    decoded = html.unescape(without_tags)
+    lines = [re.sub(r"\s+", " ", line).strip() for line in decoded.splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 def display_path(cwd: str, target_path: str) -> str:
@@ -1162,6 +1172,38 @@ class OneClawKernel:
     def _memory_path(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "memory.md"
 
+    def _todo_path(self, session_id: str) -> Path:
+        return self._session_dir(session_id) / "todo.json"
+
+    def _read_todo_items(self, session_id: str) -> list[dict[str, Any]]:
+        raw = read_text_if_exists(self._todo_path(session_id)) or "[]"
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        items: list[dict[str, Any]] = []
+        for index, item in enumerate(parsed):
+            if not isinstance(item, dict):
+                continue
+            items.append({
+                "id": str(item.get("id") or f"todo-{index + 1}"),
+                "title": str(item.get("title") or ""),
+                "status": str(item.get("status") or "pending"),
+            })
+        return items
+
+    def _write_todo_items(self, session_id: str, items: list[dict[str, Any]]) -> None:
+        normalized = []
+        for index, item in enumerate(items):
+            normalized.append({
+                "id": str(item.get("id") or f"todo-{index + 1}"),
+                "title": str(item.get("title") or ""),
+                "status": str(item.get("status") or "pending"),
+            })
+        write_text(self._todo_path(session_id), json.dumps(normalized, indent=2))
+
     def _session_matches_cwd(self, session: dict[str, Any], cwd: str) -> bool:
         resolved_cwd = os.path.realpath(cwd)
         candidate_paths = [str(session.get("cwd") or "")]
@@ -1748,6 +1790,30 @@ class OneClawKernel:
             },
         }
 
+    def todo_info(self, session_id: str) -> dict[str, Any]:
+        session = self._load_session(session_id)
+        if not session:
+            raise RuntimeError(f"Session not found: {session_id}")
+        items = self._read_todo_items(session_id)
+        by_status: dict[str, int] = {}
+        for item in items:
+            status = str(item.get("status") or "pending")
+            by_status[status] = by_status.get(status, 0) + 1
+        return {
+            "sessionId": session_id,
+            "path": str(self._todo_path(session_id)),
+            "count": len(items),
+            "byStatus": by_status,
+            "items": items,
+        }
+
+    def todo_update(self, session_id: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        session = self._load_session(session_id)
+        if not session:
+            raise RuntimeError(f"Session not found: {session_id}")
+        self._write_todo_items(session_id, items)
+        return self.todo_info(session_id)
+
     def hooks_info(self) -> dict[str, Any]:
         return {
             "hooks": self.hooks.list(),
@@ -2161,6 +2227,20 @@ class OneClawKernel:
                 "inputSchema": {"type": "object", "properties": {"cwd": {"type": "string"}}},
             },
             {
+                "name": "web_fetch",
+                "description": "Fetch a HTTP(S) URL and return readable text content.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["url"],
+                    "properties": {
+                        "url": {"type": "string"},
+                        "maxChars": {"type": "number"},
+                        "timeoutMs": {"type": "number"},
+                    },
+                },
+            },
+            {
                 "name": "todo_list",
                 "description": "Read the current session todo list.",
                 "readOnly": True,
@@ -2475,6 +2555,44 @@ class OneClawKernel:
         result["metadata"]["plugin"] = tool.get("pluginName")
         return result
 
+    def web_fetch(self, url: str, max_chars: int = 8000, timeout_ms: int = 10000) -> dict[str, Any]:
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            raise RuntimeError("web_fetch only supports http and https URLs.")
+        bounded_max = max(256, min(int(max_chars or 8000), 50000))
+        timeout = max(1, min(float(timeout_ms or 10000) / 1000, 30))
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "OneClaw/0.2 web_fetch",
+                "Accept": "text/html,text/plain,application/json,*/*;q=0.8",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status = getattr(response, "status", 200)
+                final_url = response.geturl()
+                content_type = response.headers.get("content-type", "")
+                raw = response.read(bounded_max * 4)
+        except urllib.error.HTTPError as error:
+            raw = error.read(bounded_max * 2)
+            status = error.code
+            final_url = error.geturl()
+            content_type = error.headers.get("content-type", "")
+        charset = "utf-8"
+        match = re.search(r"charset=([^;\s]+)", content_type, re.IGNORECASE)
+        if match:
+            charset = match.group(1).strip("\"'")
+        decoded = raw.decode(charset, "replace")
+        text = html_to_text(decoded) if "html" in content_type.lower() else decoded
+        return {
+            "url": final_url,
+            "status": status,
+            "contentType": content_type,
+            "text": limit_text(text.strip(), bounded_max),
+        }
+
     def _assert_budget(self) -> None:
         max_usd = self.config.get("budget", {}).get("maxUsd")
         if max_usd is not None and self.estimated_cost_usd >= float(max_usd):
@@ -2601,23 +2719,36 @@ class OneClawKernel:
                     str(diff.get("output") or "(no diff)"),
                 ]),
             }
+        if name == "web_fetch":
+            url = input_payload.get("url")
+            if not isinstance(url, str) or not url.strip():
+                return {"ok": False, "output": "Missing required field: url"}
+            try:
+                fetched = self.web_fetch(
+                    url.strip(),
+                    int(input_payload.get("maxChars") or 8000),
+                    int(input_payload.get("timeoutMs") or 10000),
+                )
+                return {
+                    "ok": int(fetched["status"]) < 400,
+                    "output": "\n".join([
+                        f"url: {fetched['url']}",
+                        f"status: {fetched['status']}",
+                        f"contentType: {fetched['contentType']}",
+                        "",
+                        str(fetched["text"]),
+                    ]),
+                }
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
         if name == "todo_list":
-            content = read_text_if_exists(self._session_dir(session["id"]) / "todo.json") or "[]"
-            return {"ok": True, "output": content}
+            return {"ok": True, "output": json.dumps(self._read_todo_items(session["id"]), indent=2)}
         if name == "todo_update":
             items = input_payload.get("items")
             if not isinstance(items, list):
                 return {"ok": False, "output": "Missing required field: items"}
-            normalized = []
-            for index, item in enumerate(items):
-                if not isinstance(item, dict):
-                    continue
-                normalized.append({
-                    "id": str(item.get("id") or f"todo-{index + 1}"),
-                    "title": str(item.get("title") or ""),
-                    "status": str(item.get("status") or "pending"),
-                })
-            write_text(self._session_dir(session["id"]) / "todo.json", json.dumps(normalized, indent=2))
+            normalized = [item for item in items if isinstance(item, dict)]
+            self._write_todo_items(session["id"], normalized)
             return {"ok": True, "output": f"Updated {len(normalized)} todo item(s)"}
         if name == "show_memory":
             return {"ok": True, "output": self._read_session_memory(session["id"]) or "(no memory yet)"}
