@@ -5,11 +5,12 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { pathToFileURL } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(here, "..")
 const installScript = resolve(projectRoot, "scripts", "install.mjs")
-const packageJson = await import(resolve(projectRoot, "package.json"), { with: { type: "json" } })
+const packageJson = await import(pathToFileURL(resolve(projectRoot, "package.json")).href, { with: { type: "json" } })
 const target = join(
   tmpdir(),
   `oneclaw-install-smoke-${process.pid}${process.platform === "win32" ? ".cmd" : ""}`,
