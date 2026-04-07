@@ -24,7 +24,9 @@ from .config import (
     PROVIDERS,
     expand_home,
     load_config,
+    read_json_if_exists,
     save_user_config_patch,
+    write_json,
 )
 from .hooks import HookExecutor, load_hook_definitions
 from .mcp import McpRegistry
@@ -1649,6 +1651,10 @@ class OneClawKernel:
                 "kind": profile["kind"],
                 "label": profile["label"],
                 "model": profile["model"],
+                "baseUrl": profile.get("baseUrl"),
+                "enterpriseUrl": profile.get("enterpriseUrl"),
+                "description": profile.get("description"),
+                "builtin": name in BUILTIN_PROVIDER_PROFILES,
             })
         return {
             "activeProfile": self.config["activeProfile"],
@@ -1728,7 +1734,7 @@ class OneClawKernel:
             "provider": {
                 "kind": kind,
                 "model": (profile or {}).get("model") or self.config["provider"].get("model"),
-                "baseUrl": self.config["provider"].get("baseUrl"),
+                "baseUrl": (profile or {}).get("baseUrl") or self.config["provider"].get("baseUrl"),
             },
             "configured": configured,
             "checks": checks,
@@ -1743,6 +1749,76 @@ class OneClawKernel:
         path = save_user_config_patch({"activeProfile": name}, self.cwd)
         self.reload()
         return {
+            "activeProfile": self.config["activeProfile"],
+            "path": path,
+        }
+
+    def _user_config_path(self) -> Path:
+        return Path(self.config["homeDir"]) / "oneclaw.config.json"
+
+    def _read_user_config(self) -> dict[str, Any]:
+        return read_json_if_exists(str(self._user_config_path())) or {}
+
+    def _write_user_config(self, payload: dict[str, Any]) -> str:
+        path = str(self._user_config_path())
+        write_json(path, payload)
+        return path
+
+    def profile_save(self, name: str, profile: dict[str, Any], activate: bool = False) -> dict[str, Any]:
+        normalized_name = name.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{1,63}", normalized_name):
+            raise RuntimeError("Profile name must be 2-64 chars using letters, numbers, dot, dash, or underscore.")
+        if normalized_name in BUILTIN_PROVIDER_PROFILES:
+            raise RuntimeError(f"Built-in provider profile cannot be overwritten: {normalized_name}")
+        known_kinds = {str(provider["kind"]) for provider in PROVIDERS}
+        kind = str(profile.get("kind") or "")
+        if kind not in known_kinds:
+            raise RuntimeError(f"Unsupported provider kind: {kind}")
+        model = str(profile.get("model") or "").strip()
+        if not model:
+            raise RuntimeError("Provider profile model is required.")
+        next_profile: dict[str, Any] = {
+            "label": str(profile.get("label") or normalized_name),
+            "kind": kind,
+            "model": model,
+        }
+        for key in ("baseUrl", "enterpriseUrl", "description"):
+            value = profile.get(key)
+            if isinstance(value, str) and value.strip():
+                next_profile[key] = value.strip()
+        payload = self._read_user_config()
+        profiles = payload.get("providerProfiles") if isinstance(payload.get("providerProfiles"), dict) else {}
+        profiles = dict(profiles)
+        profiles[normalized_name] = next_profile
+        payload["providerProfiles"] = profiles
+        if activate:
+            payload["activeProfile"] = normalized_name
+        path = self._write_user_config(payload)
+        self.reload()
+        return {
+            "name": normalized_name,
+            "profile": next_profile,
+            "activeProfile": self.config["activeProfile"],
+            "path": path,
+        }
+
+    def profile_delete(self, name: str) -> dict[str, Any]:
+        normalized_name = name.strip()
+        if normalized_name in BUILTIN_PROVIDER_PROFILES:
+            raise RuntimeError(f"Built-in provider profile cannot be deleted: {normalized_name}")
+        payload = self._read_user_config()
+        profiles = payload.get("providerProfiles") if isinstance(payload.get("providerProfiles"), dict) else {}
+        profiles = dict(profiles)
+        removed = normalized_name in profiles
+        profiles.pop(normalized_name, None)
+        payload["providerProfiles"] = profiles
+        if payload.get("activeProfile") == normalized_name:
+            payload["activeProfile"] = "codex-subscription"
+        path = self._write_user_config(payload)
+        self.reload()
+        return {
+            "name": normalized_name,
+            "deleted": bool(removed),
             "activeProfile": self.config["activeProfile"],
             "path": path,
         }

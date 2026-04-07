@@ -224,9 +224,14 @@ TUI 内也可以使用：
 /provider doctor
 /provider test
 /provider setup <name>
-/profile
+/profile list
+/profile save local-openai openai-compatible gpt-5.4 --base-url http://127.0.0.1:8000/v1 --label "Local OpenAI" --use
+/profile show local-openai
+/profile delete local-openai
 /model <model>
 ```
+
+Profile 会持久化到 `~/.oneclaw/oneclaw.config.json`，内置 profile 只读，适合保留 OpenHarness 风格的“命名 provider workflow”。
 
 ---
 
@@ -392,7 +397,7 @@ bun run sandbox:smoke
 | `/cost` / `/usage` | 查看 token 和成本 |
 | `/sessions` / `/resume` | 管理 session |
 | `/share` / `/tag` / `/copy` | 导出、标记或复制当前会话内容 |
-| `/provider` / `/profile` / `/model` | 管理 provider |
+| `/provider` / `/profile` / `/model` | 管理 provider、命名 profile 与模型 |
 | `/theme` / `/output-style` | 管理 TUI/CLI 输出偏好 |
 | `/keybindings` | 查看或持久化快捷键映射 |
 | `/fast` / `/effort` / `/passes` / `/turns` | 管理运行时速度、推理强度和 query loop 上限 |

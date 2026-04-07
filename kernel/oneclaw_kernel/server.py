@@ -102,6 +102,14 @@ def main() -> int:
                 result = kernel.profile_list()
             elif method == "profile_use":
                 result = kernel.profile_use(params["name"])
+            elif method == "profile_save":
+                result = kernel.profile_save(
+                    params["name"],
+                    params.get("profile") or {},
+                    bool(params.get("activate")),
+                )
+            elif method == "profile_delete":
+                result = kernel.profile_delete(params["name"])
             elif method == "reload":
                 result = kernel.reload_runtime()
             elif method == "config_patch":

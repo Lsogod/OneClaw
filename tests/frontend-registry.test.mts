@@ -65,6 +65,18 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       activeProfile: name,
       path: "/tmp/oneclaw.config.json",
     }),
+    profileSave: async (name: string, profile: Record<string, unknown>, options?: { activate?: boolean }) => ({
+      name,
+      profile,
+      activeProfile: options?.activate ? name : "codex-subscription",
+      path: "/tmp/oneclaw.config.json",
+    }),
+    profileDelete: async (name: string) => ({
+      name,
+      deleted: true,
+      activeProfile: "codex-subscription",
+      path: "/tmp/oneclaw.config.json",
+    }),
     health: async () => ({
       ok: true,
       provider: "codex-subscription",
@@ -529,6 +541,70 @@ describe("Frontend command registry", () => {
 
     expect(uses).toEqual(["openai-compatible"])
     expect(result?.message).toContain("Persisted provider profile openai-compatible")
+  })
+
+  test("profile command saves, shows, and deletes custom provider profiles", async () => {
+    const registry = createFrontendCommandRegistry()
+    const saved: Array<{ name: string; profile: Record<string, unknown>; activate?: boolean }> = []
+    const deleted: string[] = []
+    const context = {
+      client: createFakeClient({
+        profileList: async () => [
+          {
+            name: "local-openai",
+            active: false,
+            kind: "openai-compatible",
+            label: "LocalOpenAI",
+            model: "gpt-local",
+            baseUrl: "http://127.0.0.1:8000/v1",
+          },
+        ],
+        profileSave: async (name: string, profile: Record<string, unknown>, options?: { activate?: boolean }) => {
+          saved.push({ name, profile, activate: options?.activate })
+          return {
+            name,
+            profile,
+            activeProfile: options?.activate ? name : "codex-subscription",
+            path: "/tmp/oneclaw.config.json",
+          }
+        },
+        profileDelete: async (name: string) => {
+          deleted.push(name)
+          return {
+            name,
+            deleted: true,
+            activeProfile: "codex-subscription",
+            path: "/tmp/oneclaw.config.json",
+          }
+        },
+      }),
+      sessionId: "session_current",
+      cwd: "/tmp/workspace",
+    } as never
+
+    const saveLookup = registry.lookup("/profile save local-openai openai-compatible gpt-local --base-url http://127.0.0.1:8000/v1 --label \"Local OpenAI\" --description \"Local gateway\" --use")
+    const showLookup = registry.lookup("/profile show local-openai")
+    const deleteLookup = registry.lookup("/profile delete local-openai")
+
+    const saveResult = await saveLookup?.command.handler(saveLookup.args, context)
+    const showResult = await showLookup?.command.handler(showLookup.args, context)
+    const deleteResult = await deleteLookup?.command.handler(deleteLookup.args, context)
+
+    expect(saved[0]).toEqual({
+      name: "local-openai",
+      profile: {
+        kind: "openai-compatible",
+        model: "gpt-local",
+        label: "Local OpenAI",
+        baseUrl: "http://127.0.0.1:8000/v1",
+        description: "Local gateway",
+      },
+      activate: true,
+    })
+    expect(saveResult?.message).toContain("local-openai")
+    expect(showResult?.message).toContain("gpt-local")
+    expect(deleteResult?.message).toContain("\"deleted\": true")
+    expect(deleted).toEqual(["local-openai"])
   })
 
   test("provider setup command returns auth guidance for target providers", async () => {

@@ -205,6 +205,35 @@ export class KernelClient {
     return this.request<{ activeProfile: string; path: string }>("profile_use", { name })
   }
 
+  profileSave(
+    name: string,
+    profile: {
+      label?: string
+      kind: string
+      model: string
+      baseUrl?: string
+      enterpriseUrl?: string
+      description?: string
+    },
+    options: { activate?: boolean } = {},
+  ) {
+    return this.request<{
+      name: string
+      profile: Record<string, unknown>
+      activeProfile: string
+      path: string
+    }>("profile_save", { name, profile, activate: Boolean(options.activate) })
+  }
+
+  profileDelete(name: string) {
+    return this.request<{
+      name: string
+      deleted: boolean
+      activeProfile: string
+      path: string
+    }>("profile_delete", { name })
+  }
+
   reload() {
     return this.request<Record<string, unknown>>("reload")
   }

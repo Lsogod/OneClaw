@@ -34,6 +34,13 @@ const VALID_HOOK_EVENTS = new Set([
   "after_tool",
 ])
 const VALID_HOOK_TYPES = new Set(["command", "http"])
+const VALID_PUBLIC_PROVIDER_KINDS = new Set([
+  "anthropic-compatible",
+  "claude-subscription",
+  "openai-compatible",
+  "codex-subscription",
+  "github-copilot",
+])
 const THEME_CATALOG = {
   neutral: "Default low-noise terminal theme.",
   contrast: "Higher contrast theme for dim terminals and projectors.",
@@ -112,7 +119,45 @@ function pretty(value: unknown): string {
 }
 
 function words(args: string): string[] {
-  return args.trim().split(/\s+/).filter(Boolean)
+  const result: string[] = []
+  let current = ""
+  let quoted: string | null = null
+  let escaping = false
+  for (const char of args.trim()) {
+    if (escaping) {
+      current += char
+      escaping = false
+      continue
+    }
+    if (quoted) {
+      if (char === "\\") {
+        escaping = true
+        continue
+      }
+      if (char === quoted) {
+        quoted = null
+        continue
+      }
+      current += char
+      continue
+    }
+    if (char === "\"" || char === "'") {
+      quoted = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        result.push(current)
+        current = ""
+      }
+      continue
+    }
+    current += char
+  }
+  if (current) {
+    result.push(current)
+  }
+  return result
 }
 
 function quote(value: unknown): string {
@@ -151,6 +196,28 @@ function parseBoundedPositiveInt(raw: string, min: number, max: number): number 
     return null
   }
   return parsed
+}
+
+function takeFlagValue(parts: string[], flags: string[]): string | null {
+  const index = parts.findIndex(part => flags.includes(part))
+  if (index < 0) {
+    return null
+  }
+  const value = parts[index + 1]
+  if (!value || value.startsWith("--")) {
+    return ""
+  }
+  parts.splice(index, 2)
+  return value
+}
+
+function takeFlag(parts: string[], flag: string): boolean {
+  const index = parts.indexOf(flag)
+  if (index < 0) {
+    return false
+  }
+  parts.splice(index, 1)
+  return true
 }
 
 function extractVoiceKeyterms(text: string): string[] {
@@ -1152,7 +1219,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
 
   registry.register({
     name: "profile",
-    description: "List or persist the active provider profile",
+    description: "List, create, delete, or persist provider profiles",
     handler: async (args, context) => {
       const parts = words(args)
       if (parts.length === 0 || parts[0] === "list") {
@@ -1160,15 +1227,70 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           message: pretty(await context.client.profileList()),
         }
       }
-      if (parts[0] === "current" || parts[0] === "show") {
+      if (parts[0] === "current") {
         const state = await context.client.state()
         return {
           message: extractString(state, "activeProfile"),
         }
       }
+      if (parts[0] === "show") {
+        if (!parts[1]) {
+          const state = await context.client.state()
+          return {
+            message: extractString(state, "activeProfile"),
+          }
+        }
+        const profiles = await context.client.profileList()
+        const profile = (profiles as Array<Record<string, unknown>>)
+          .find(item => item.name === parts[1] || item.kind === parts[1])
+        return {
+          message: profile ? pretty(profile) : `Profile not found: ${parts[1]}`,
+        }
+      }
+      if (parts[0] === "save" || parts[0] === "create") {
+        const name = parts[1]
+        const kind = parts[2]
+        if (!name || !kind || !VALID_PUBLIC_PROVIDER_KINDS.has(kind)) {
+          return {
+            message: "Usage: /profile save <name> <provider-kind> <model> [--base-url <url>] [--enterprise-url <url>] [--label <label>] [--description <text>] [--use]",
+          }
+        }
+        const rest = parts.slice(3)
+        const activate = takeFlag(rest, "--use")
+        const baseUrl = takeFlagValue(rest, ["--base-url", "--url"])
+        const enterpriseUrl = takeFlagValue(rest, ["--enterprise-url"])
+        const label = takeFlagValue(rest, ["--label"])
+        const description = takeFlagValue(rest, ["--description", "--desc"])
+        const flaggedModel = takeFlagValue(rest, ["--model", "-m"])
+        const model = flaggedModel || (rest[0] && !rest[0].startsWith("-") ? rest.shift() : "")
+        if (!model) {
+          return {
+            message: "Usage: /profile save <name> <provider-kind> <model> [--base-url <url>] [--enterprise-url <url>] [--label <label>] [--description <text>] [--use]",
+          }
+        }
+        const result = await context.client.profileSave(name, {
+          kind,
+          model,
+          label: label || name,
+          ...(baseUrl ? { baseUrl } : {}),
+          ...(enterpriseUrl ? { enterpriseUrl } : {}),
+          ...(description ? { description } : {}),
+        }, { activate })
+        return {
+          message: pretty(result),
+        }
+      }
+      if (parts[0] === "delete" || parts[0] === "remove") {
+        if (!parts[1]) {
+          return { message: "Usage: /profile delete <name>" }
+        }
+        return {
+          message: pretty(await context.client.profileDelete(parts[1])),
+        }
+      }
       if (parts[0] !== "use" || !parts[1]) {
         return {
-          message: "Usage: /profile list | /profile current | /profile use <name>",
+          message: "Usage: /profile list | /profile current | /profile show [name] | /profile save <name> <kind> <model> [--base-url <url>] [--use] | /profile delete <name> | /profile use <name>",
         }
       }
       const result = await context.client.profileUse(parts[1])

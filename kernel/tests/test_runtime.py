@@ -68,6 +68,39 @@ class KernelRuntimeTests(unittest.TestCase):
                 kernel.run_prompt("hello again", session_id=session["id"])
             kernel.shutdown()
 
+    def test_provider_profile_lifecycle_persists_user_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            os.environ["ONECLAW_HOME"] = root
+            original_provider = os.environ.pop("ONECLAW_PROVIDER", None)
+            try:
+                kernel = OneClawKernel(root)
+                saved = kernel.profile_save("local-openai", {
+                    "kind": "openai-compatible",
+                    "model": "gpt-local",
+                    "label": "Local OpenAI",
+                    "baseUrl": "http://127.0.0.1:8000/v1",
+                }, activate=True)
+
+                self.assertEqual(saved["activeProfile"], "local-openai")
+                self.assertEqual(kernel.config["activeProfile"], "local-openai")
+                self.assertTrue(Path(saved["path"]).exists())
+                profiles = kernel.profile_list()
+                local_profile = next(item for item in profiles if item["name"] == "local-openai")
+                self.assertEqual(local_profile["baseUrl"], "http://127.0.0.1:8000/v1")
+
+                deleted = kernel.profile_delete("local-openai")
+                self.assertTrue(deleted["deleted"])
+                self.assertEqual(deleted["activeProfile"], "codex-subscription")
+                self.assertFalse(any(item["name"] == "local-openai" for item in kernel.profile_list()))
+                with self.assertRaisesRegex(RuntimeError, "cannot be overwritten"):
+                    kernel.profile_save("openai-compatible", {
+                        "kind": "openai-compatible",
+                        "model": "gpt-local",
+                    })
+            finally:
+                if original_provider is not None:
+                    os.environ["ONECLAW_PROVIDER"] = original_provider
+
     def test_tool_registry_context_and_compact_policy_are_exposed(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             os.environ["ONECLAW_HOME"] = root
