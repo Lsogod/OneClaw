@@ -2283,6 +2283,44 @@ class OneClawKernel:
     def _execute_command(self, command: str, cwd: str, timeout_ms: int = 20000) -> dict[str, Any]:
         return self._execute_command_interruptible(command, cwd, timeout_ms, None)
 
+    def _terminate_process_tree(self, process: subprocess.Popen[str], *, force: bool = False) -> None:
+        if process.poll() is not None:
+            return
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                    check=False,
+                )
+                return
+            except Exception:
+                pass
+            try:
+                process.kill() if force else process.terminate()
+            except Exception:
+                pass
+            return
+        try:
+            os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+        except Exception:
+            try:
+                process.kill() if force else process.terminate()
+            except Exception:
+                pass
+
+    def _communicate_process(self, process: subprocess.Popen[str], timeout: float = 2) -> tuple[str, str]:
+        try:
+            return process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self._terminate_process_tree(process, force=True)
+            try:
+                return process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                return "", "Process output collection timed out after termination."
+
     def _execute_command_interruptible(
         self,
         command: str,
@@ -2309,29 +2347,17 @@ class OneClawKernel:
             while process.poll() is None:
                 if should_cancel and should_cancel():
                     cancelled = True
-                    try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                    except Exception:
-                        try:
-                            process.terminate()
-                        except Exception:
-                            pass
+                    self._terminate_process_tree(process)
                     break
                 if time.time() >= deadline:
-                    try:
-                        os.killpg(process.pid, signal.SIGTERM)
-                    except Exception:
-                        try:
-                            process.terminate()
-                        except Exception:
-                            pass
-                    stdout_value, stderr_value = process.communicate(timeout=2)
+                    self._terminate_process_tree(process)
+                    stdout_value, stderr_value = self._communicate_process(process, timeout=2)
                     return {
                         "ok": False,
                         "output": f"Command timed out after {timeout_ms}ms\n{limit_text((stdout_value or '') + (stderr_value or ''), 10_000)}".strip(),
                     }
                 time.sleep(0.05)
-            stdout_value, stderr_value = process.communicate(timeout=2)
+            stdout_value, stderr_value = self._communicate_process(process, timeout=2)
             if cancelled:
                 return {
                     "ok": False,
