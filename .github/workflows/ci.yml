@@ -1,0 +1,89 @@
+name: OneClaw
+
+on:
+  push:
+    paths:
+      - "kernel/**"
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "bin/**"
+      - "plugins/**"
+      - ".github/workflows/ci.yml"
+      - "package.json"
+      - "tsconfig.json"
+      - "bun.lock"
+  pull_request:
+    paths:
+      - "kernel/**"
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - "bin/**"
+      - "plugins/**"
+      - ".github/workflows/ci.yml"
+      - "package.json"
+      - "tsconfig.json"
+      - "bun.lock"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        python:
+          - "3.10"
+          - "3.11"
+
+    env:
+      ONECLAW_PROVIDER: internal-test
+      ONECLAW_HOME: ${{ runner.temp }}/oneclaw-home
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Release check
+        run: bun run release:check
+
+      - name: Bun tests
+        run: bun test ./tests
+
+      - name: Python kernel tests
+        run: node ./scripts/kernel-test.mjs
+
+      - name: Launcher smoke
+        run: node ./bin/one.mjs --version
+
+      - name: CLI smoke
+        run: node ./bin/one.mjs smoke --prompt "Reply with only: pong"
+
+      - name: Sandbox smoke
+        run: bun run sandbox:smoke
+
+      - name: Install smoke
+        run: bun run install:smoke

@@ -1,0 +1,13 @@
+{
+  "provider": {
+    "kind": "codex-subscription",
+    "model": "gpt-5.4",
+    "baseUrl": "https://chatgpt.com/backend-api",
+    "maxTokens": 4096
+  },
+  "mcpServers": [],
+  "bridge": {
+    "host": "127.0.0.1",
+    "port": 4520
+  }
+}
