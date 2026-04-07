@@ -79,6 +79,8 @@ jobs:
         run: node ./bin/one.mjs --version
 
       - name: CLI smoke
+        env:
+          ONECLAW_PROVIDER: internal-test
         run: |
           node ./bin/one.mjs smoke --prompt "Reply with only: pong"
 

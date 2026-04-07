@@ -2,11 +2,11 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, statSync } from "node:fs"
 import { dirname, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const projectRoot = resolve(here, "..")
-const packageJson = await import(resolve(projectRoot, "package.json"), { with: { type: "json" } })
+const packageJson = await import(pathToFileURL(resolve(projectRoot, "package.json")).href, { with: { type: "json" } })
 const version = packageJson.default.version
 const binPath = resolve(projectRoot, packageJson.default.bin.one)
 const installScript = resolve(projectRoot, "scripts", "install.mjs")
