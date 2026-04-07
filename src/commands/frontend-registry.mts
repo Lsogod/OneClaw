@@ -24,6 +24,15 @@ const ONECLAW_NEXT_VERSION = "0.2.0"
 const VALID_PERMISSION_MODES = new Set(["allow", "ask", "deny"])
 const VALID_THEMES = new Set(["neutral", "contrast"])
 const VALID_OUTPUT_STYLES = new Set(["text", "json"])
+const VALID_HOOK_EVENTS = new Set([
+  "session_start",
+  "session_end",
+  "before_model",
+  "after_model",
+  "before_tool",
+  "after_tool",
+])
+const VALID_HOOK_TYPES = new Set(["command", "http"])
 const THEME_CATALOG = {
   neutral: "Default low-noise terminal theme.",
   contrast: "Higher contrast theme for dim terminals and projectors.",
@@ -315,6 +324,120 @@ async function initializeProject(cwd: string, force = false): Promise<Record<str
     oneclawDir,
     created,
     skipped,
+  }
+}
+
+function projectHooksPath(cwd: string): string {
+  return join(cwd, ".oneclaw", "hooks.json")
+}
+
+function normalizeHooksDocument(raw: unknown): { hooks: Array<Record<string, unknown>> } {
+  if (Array.isArray(raw)) {
+    return {
+      hooks: raw.filter(item => typeof item === "object" && item !== null) as Array<Record<string, unknown>>,
+    }
+  }
+  if (raw && typeof raw === "object" && Array.isArray((raw as { hooks?: unknown }).hooks)) {
+    return {
+      hooks: ((raw as { hooks: unknown[] }).hooks)
+        .filter(item => typeof item === "object" && item !== null) as Array<Record<string, unknown>>,
+    }
+  }
+  return { hooks: [] }
+}
+
+function validateHooksDocument(raw: unknown): Record<string, unknown> {
+  const normalized = normalizeHooksDocument(raw)
+  const errors: string[] = []
+  normalized.hooks.forEach((hook, index) => {
+    const prefix = `hooks[${index}]`
+    if (typeof hook.name !== "string" || !hook.name.trim()) {
+      errors.push(`${prefix}.name must be a non-empty string`)
+    }
+    if (typeof hook.event !== "string" || !VALID_HOOK_EVENTS.has(hook.event)) {
+      errors.push(`${prefix}.event must be one of ${[...VALID_HOOK_EVENTS].join(", ")}`)
+    }
+    if (typeof hook.type !== "string" || !VALID_HOOK_TYPES.has(hook.type)) {
+      errors.push(`${prefix}.type must be command or http`)
+    }
+    if (hook.type === "command" && typeof hook.command !== "string") {
+      errors.push(`${prefix}.command must be a string for command hooks`)
+    }
+    if (hook.type === "http" && typeof hook.url !== "string") {
+      errors.push(`${prefix}.url must be a string for http hooks`)
+    }
+  })
+  return {
+    valid: errors.length === 0,
+    count: normalized.hooks.length,
+    errors,
+  }
+}
+
+async function readHooksDocument(pathname: string): Promise<{ hooks: Array<Record<string, unknown>> }> {
+  const raw = await readTextIfExists(pathname)
+  if (!raw) {
+    return { hooks: [] }
+  }
+  return normalizeHooksDocument(JSON.parse(raw))
+}
+
+async function writeHooksDocument(pathname: string, hooks: Array<Record<string, unknown>>): Promise<void> {
+  await writeText(pathname, `${JSON.stringify({ hooks }, null, 2)}\n`)
+}
+
+async function hooksFileSummary(context: FrontendCommandContext): Promise<Record<string, unknown>> {
+  const config = await loadConfig(context.cwd)
+  const files = await Promise.all(config.hooks.files.map(async file => {
+    const raw = await readTextIfExists(file)
+    if (!raw) {
+      return {
+        path: file,
+        exists: false,
+        valid: true,
+        count: 0,
+      }
+    }
+    try {
+      return {
+        path: file,
+        exists: true,
+        ...validateHooksDocument(JSON.parse(raw)),
+      }
+    } catch (error) {
+      return {
+        path: file,
+        exists: true,
+        valid: false,
+        count: 0,
+        errors: [error instanceof Error ? error.message : String(error)],
+      }
+    }
+  }))
+  return {
+    files,
+    configured: await context.client.hooks(),
+  }
+}
+
+async function writeDiagnosticBundle(context: FrontendCommandContext): Promise<Record<string, unknown>> {
+  const directory = join(oneclawHome(), "diagnostics")
+  const path = join(directory, `${timestampForFile()}-diagnostic.json`)
+  const payload = {
+    createdAt: new Date().toISOString(),
+    cwd: context.cwd,
+    sessionId: context.sessionId,
+    doctor: await doctorSummary(context),
+    status: await context.client.status(context.sessionId),
+    context: await context.client.context(context.sessionId),
+    usage: await context.client.usage(),
+    observability: await context.client.observability(),
+    tools: await context.client.tools({ summaryOnly: true }),
+  }
+  await writeText(path, `${JSON.stringify(payload, null, 2)}\n`)
+  return {
+    path,
+    bytes: JSON.stringify(payload).length,
   }
 }
 
@@ -1099,7 +1222,44 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   registry.register({
     name: "keybindings",
     description: "Show the active keybinding map",
-    handler: async (_args, context) => {
+    handler: async (args, context) => {
+      const parts = words(args)
+      if (parts[0] === "path") {
+        return {
+          message: join(oneclawHome(), "oneclaw.config.json"),
+        }
+      }
+      if (parts[0] === "set" && parts[1] && parts[2]) {
+        const state = await context.client.state() as { keybindings?: Record<string, string> }
+        const result = await context.client.updateConfigPatch({
+          output: {
+            keybindings: {
+              ...(state.keybindings ?? {}),
+              [parts[1]]: parts.slice(2).join(" "),
+            },
+          },
+        })
+        return {
+          message: `Persisted keybinding ${parts[1]} to ${parts.slice(2).join(" ")} in ${result.path}`,
+        }
+      }
+      if (parts[0] === "reset") {
+        const result = await context.client.updateConfigPatch({
+          output: {
+            keybindings: {
+              submit: "enter",
+              exit: "ctrl+c",
+              help: "/help",
+            },
+          },
+        })
+        return {
+          message: `Reset keybindings in ${result.path}`,
+        }
+      }
+      if (parts.length > 0 && parts[0] !== "show" && parts[0] !== "list") {
+        return { message: "Usage: /keybindings [show|list|path|set <action> <binding>|reset]" }
+      }
       const state = await context.client.state()
       return {
         message: pretty(state.keybindings ?? {}),
@@ -1146,9 +1306,16 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   registry.register({
     name: "doctor",
     description: "Run runtime, auth, git, plugin, and MCP checks",
-    handler: async (_args, context) => ({
-      message: pretty(await doctorSummary(context)),
-    }),
+    handler: async (args, context) => {
+      if (args.trim() === "bundle") {
+        return {
+          message: pretty(await writeDiagnosticBundle(context)),
+        }
+      }
+      return {
+        message: pretty(await doctorSummary(context)),
+      }
+    },
   })
 
   registry.register({
@@ -2007,9 +2174,90 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   registry.register({
     name: "hooks",
     description: "Show runtime and plugin hook registrations",
-    handler: async (_args, context) => ({
-      message: pretty(await context.client.hooks()),
-    }),
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts[0] ?? ""
+      if (!action || action === "show" || action === "list") {
+        return {
+          message: pretty(await context.client.hooks()),
+        }
+      }
+      if (action === "files") {
+        return {
+          message: pretty(await hooksFileSummary(context)),
+        }
+      }
+      if (action === "init") {
+        const scope = parts[1] === "global" ? "global" : "project"
+        const target = scope === "global"
+          ? join(oneclawHome(), "hooks.json")
+          : projectHooksPath(context.cwd)
+        if (!existsSync(target)) {
+          await writeHooksDocument(target, [])
+        }
+        return {
+          message: `Initialized ${scope} hooks file at ${target}`,
+        }
+      }
+      if (action === "validate") {
+        const target = args.replace(/^validate\s*/, "").trim() || projectHooksPath(context.cwd)
+        const raw = await readTextIfExists(target)
+        if (!raw) {
+          return { message: `Hook file not found: ${target}` }
+        }
+        return {
+          message: pretty(validateHooksDocument(JSON.parse(raw))),
+        }
+      }
+      if (action === "add") {
+        const hookType = parts[1]
+        const event = parts[2]
+        const name = parts[3]
+        const commandOrUrl = args.split(/\s+/).slice(4).join(" ").trim()
+        if (hookType !== "command" || !event || !name || !commandOrUrl) {
+          return { message: "Usage: /hooks add command <event> <name> <command>" }
+        }
+        if (!VALID_HOOK_EVENTS.has(event)) {
+          return { message: `Invalid hook event: ${event}` }
+        }
+        const target = projectHooksPath(context.cwd)
+        const document = await readHooksDocument(target)
+        document.hooks = document.hooks.filter(hook => hook.name !== name)
+        document.hooks.push({
+          name,
+          event,
+          type: "command",
+          command: commandOrUrl,
+          timeoutMs: 5000,
+          blockOnFailure: false,
+        })
+        await writeHooksDocument(target, document.hooks)
+        await context.client.reload()
+        return {
+          message: `Added command hook ${name} to ${target} and reloaded runtime.`,
+        }
+      }
+      if (action === "remove" && parts[1]) {
+        const target = projectHooksPath(context.cwd)
+        const document = await readHooksDocument(target)
+        const before = document.hooks.length
+        document.hooks = document.hooks.filter(hook => hook.name !== parts[1])
+        await writeHooksDocument(target, document.hooks)
+        await context.client.reload()
+        return {
+          message: before === document.hooks.length
+            ? `Hook not found in project hooks: ${parts[1]}`
+            : `Removed hook ${parts[1]} from ${target} and reloaded runtime.`,
+        }
+      }
+      if (action === "reload") {
+        await context.client.reload()
+        return {
+          message: pretty(await context.client.hooks()),
+        }
+      }
+      return { message: "Usage: /hooks [list|files|init [project|global]|validate [path]|add command <event> <name> <command>|remove <name>|reload]" }
+    },
   })
 
   registry.register({

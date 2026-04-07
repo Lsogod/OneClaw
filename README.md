@@ -339,6 +339,10 @@ Skills 与 memory 会进入 prompt assembly，并受 context budget 约束。常
 /plugin tools <name>
 /plugin hooks <name>
 /plugin reload
+/hooks files
+/hooks add command <event> <name> <command>
+/hooks validate
+/hooks reload
 /skills
 /skills search <query>
 /skills show <name>
@@ -390,13 +394,14 @@ bun run sandbox:smoke
 | `/share` / `/tag` / `/copy` | 导出、标记或复制当前会话内容 |
 | `/provider` / `/profile` / `/model` | 管理 provider |
 | `/theme` / `/output-style` | 管理 TUI/CLI 输出偏好 |
+| `/keybindings` | 查看或持久化快捷键映射 |
 | `/tools` | 查看 tool registry |
 | `/mcp` | 管理 MCP |
-| `/plugin` / `/skills` | 管理 plugin 与 skills |
+| `/plugin` / `/skills` / `/hooks` | 管理 plugin、skills 与 lifecycle hooks |
 | `/plan` / `/review` | 运行规划或 review prompt |
 | `/tasks` / `/agents` | 管理 task 与 team |
 | `/bridge` | 管理 bridge 控制面 |
-| `/doctor` | 环境诊断 |
+| `/doctor` / `/doctor bundle` | 环境诊断与诊断包导出 |
 | `/privacy-settings` / `/rate-limit-options` | 查看本地隐私边界和限流治理建议 |
 | `/feedback` / `/release-notes` / `/upgrade` | 本地反馈、发布说明和源码升级提示 |
 

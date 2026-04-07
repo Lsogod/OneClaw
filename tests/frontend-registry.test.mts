@@ -867,6 +867,109 @@ describe("Frontend command registry", () => {
     expect(result?.message).toContain("\"skills\"")
   })
 
+  test("doctor bundle writes a local diagnostic artifact", async () => {
+    const originalHome = process.env.ONECLAW_HOME
+    const homeDir = join(tmpdir(), `oneclaw-doctor-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const root = join(tmpdir(), `oneclaw-doctor-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    await mkdir(homeDir, { recursive: true })
+    await mkdir(root, { recursive: true })
+    process.env.ONECLAW_HOME = homeDir
+
+    try {
+      const registry = createFrontendCommandRegistry()
+      const lookedUp = registry.lookup("/doctor bundle")
+
+      const result = await lookedUp?.command.handler(lookedUp.args, {
+        client: createFakeClient(),
+        sessionId: "session_current",
+        cwd: root,
+      } as never)
+
+      const parsed = JSON.parse(result?.message ?? "{}") as { path?: string }
+      expect(parsed.path).toContain("diagnostics")
+      expect(existsSync(parsed.path ?? "")).toBe(true)
+      expect(await readFile(parsed.path ?? "", "utf8")).toContain("session_current")
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ONECLAW_HOME
+      } else {
+        process.env.ONECLAW_HOME = originalHome
+      }
+    }
+  })
+
+  test("hooks command initializes, validates, mutates, and reloads hook files", async () => {
+    const originalHome = process.env.ONECLAW_HOME
+    const homeDir = join(tmpdir(), `oneclaw-hooks-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const workspace = join(tmpdir(), `oneclaw-hooks-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    await mkdir(homeDir, { recursive: true })
+    await mkdir(workspace, { recursive: true })
+    process.env.ONECLAW_HOME = homeDir
+
+    try {
+      const registry = createFrontendCommandRegistry()
+      const context = {
+        client: createFakeClient(),
+        sessionId: "session_current",
+        cwd: workspace,
+      } as never
+      const initLookup = registry.lookup("/hooks init")
+      const addLookup = registry.lookup("/hooks add command before_model mark-before echo before")
+      const validateLookup = registry.lookup("/hooks validate")
+      const filesLookup = registry.lookup("/hooks files")
+      const removeLookup = registry.lookup("/hooks remove mark-before")
+
+      const initResult = await initLookup?.command.handler(initLookup.args, context)
+      const addResult = await addLookup?.command.handler(addLookup.args, context)
+      const validateResult = await validateLookup?.command.handler(validateLookup.args, context)
+      const filesResult = await filesLookup?.command.handler(filesLookup.args, context)
+      const removeResult = await removeLookup?.command.handler(removeLookup.args, context)
+
+      const hookPath = join(workspace, ".oneclaw", "hooks.json")
+      expect(initResult?.message).toContain(hookPath)
+      expect(addResult?.message).toContain("mark-before")
+      expect(validateResult?.message).toContain('"valid": true')
+      expect(filesResult?.message).toContain(hookPath)
+      expect(removeResult?.message).toContain("Removed hook mark-before")
+      expect((await readFile(hookPath, "utf8")).includes("mark-before")).toBe(false)
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ONECLAW_HOME
+      } else {
+        process.env.ONECLAW_HOME = originalHome
+      }
+    }
+  })
+
+  test("keybindings command persists configured bindings", async () => {
+    const registry = createFrontendCommandRegistry()
+    const setLookup = registry.lookup("/keybindings set palette ctrl+k")
+    const resetLookup = registry.lookup("/keybindings reset")
+    const patches: Record<string, unknown>[] = []
+
+    const context = {
+      client: createFakeClient({
+        updateConfigPatch: async (patch: Record<string, unknown>) => {
+          patches.push(patch)
+          return {
+            path: "/tmp/oneclaw.config.json",
+            state: { keybindings: (patch.output as { keybindings?: unknown }).keybindings },
+          }
+        },
+      }),
+      sessionId: "session_current",
+      cwd: "/tmp/workspace",
+    } as never
+
+    const setResult = await setLookup?.command.handler(setLookup.args, context)
+    const resetResult = await resetLookup?.command.handler(resetLookup.args, context)
+
+    expect(setResult?.message).toContain("palette")
+    expect(resetResult?.message).toContain("Reset keybindings")
+    expect(JSON.stringify(patches[0])).toContain("ctrl+k")
+    expect(JSON.stringify(patches[1])).toContain("enter")
+  })
+
   test("bridge status/auth commands expose config and fetched bridge state", async () => {
     const originalHome = process.env.ONECLAW_HOME
     const originalFetch = globalThis.fetch
