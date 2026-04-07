@@ -80,7 +80,8 @@ jobs:
         run: node ./bin/one.mjs --version
 
       - name: CLI smoke
-        run: node ./bin/one.mjs smoke --prompt "Reply with only: pong"
+        run: |
+          node ./bin/one.mjs smoke --prompt "Reply with only: pong"
 
       - name: Sandbox smoke
         run: bun run sandbox:smoke
