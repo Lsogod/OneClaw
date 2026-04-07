@@ -3,6 +3,10 @@ import { spawnSync } from "node:child_process"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
+import { fileURLToPath } from "node:url"
+
+const repoRoot = fileURLToPath(new URL("..", import.meta.url))
+const cliPath = fileURLToPath(new URL("../src/cli.mts", import.meta.url))
 
 describe("CLI output", () => {
   test("single prompt JSON output stays parseable on stdout", async () => {
@@ -10,7 +14,6 @@ describe("CLI output", () => {
     const homeDir = join(root, "home")
     await mkdir(homeDir, { recursive: true })
 
-    const cliPath = new URL("../src/cli.mts", import.meta.url).pathname
     const processResult = spawnSync("bun", [
       cliPath,
       "-p",
@@ -18,7 +21,7 @@ describe("CLI output", () => {
       "--output-format",
       "json",
     ], {
-      cwd: "/Users/mac/Documents/OneClaw",
+      cwd: repoRoot,
       env: {
         ...process.env,
         ONECLAW_HOME: homeDir,
@@ -47,7 +50,6 @@ describe("CLI output", () => {
       },
     }, null, 2))
 
-    const cliPath = new URL("../src/cli.mts", import.meta.url).pathname
     const processResult = spawnSync("bun", [
       cliPath,
       "-p",
@@ -78,13 +80,12 @@ describe("CLI output", () => {
     const homeDir = join(root, "home")
     await mkdir(homeDir, { recursive: true })
 
-    const cliPath = new URL("../src/cli.mts", import.meta.url).pathname
     const processResult = spawnSync("bun", [
       cliPath,
       "-p",
       "hello",
     ], {
-      cwd: "/Users/mac/Documents/OneClaw",
+      cwd: repoRoot,
       env: {
         ...process.env,
         ONECLAW_HOME: homeDir,
@@ -105,7 +106,6 @@ describe("CLI output", () => {
     const homeDir = join(root, "home")
     await mkdir(homeDir, { recursive: true })
 
-    const cliPath = new URL("../src/cli.mts", import.meta.url).pathname
     const processResult = spawnSync("bun", [
       cliPath,
       "smoke",
@@ -113,7 +113,7 @@ describe("CLI output", () => {
       "--prompt",
       "Reply with only: pong",
     ], {
-      cwd: "/Users/mac/Documents/OneClaw",
+      cwd: repoRoot,
       env: {
         ...process.env,
         ONECLAW_HOME: homeDir,
