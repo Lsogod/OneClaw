@@ -696,11 +696,16 @@ export default {
             errors: list[str] = []
             outputs: list[str] = []
             python_command = "python" if os.name == "nt" else "python3"
+            Path(root, "sleep_cancel.py").write_text(
+                "import time\n"
+                "time.sleep(5)\n",
+                "utf-8",
+            )
 
             def target() -> None:
                 try:
                     result = kernel.run_prompt(
-                        f'run shell {python_command} -c "import time; time.sleep(5)"',
+                        f"run shell {python_command} sleep_cancel.py",
                         cwd=root,
                         should_cancel=cancelled.is_set,
                     )
