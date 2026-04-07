@@ -1,6 +1,7 @@
-import { readdir } from "node:fs/promises"
+import { mkdir, readdir } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { collectProviderAuthStatuses } from "../providers/auth.mts"
 import { TeamRegistry } from "../agents/team-registry.mts"
 import { Coordinator } from "../coordinator/coordinator.mts"
@@ -17,12 +18,20 @@ import {
   validatePluginDirectory,
 } from "../plugins/installer.mts"
 import { TaskManager } from "../tasks/task-manager.mts"
-import { expandHome, readTextIfExists } from "../utils.mts"
+import { appendText, ensureDir, expandHome, readTextIfExists, slugify, writeText } from "../utils.mts"
 
 const ONECLAW_NEXT_VERSION = "0.2.0"
 const VALID_PERMISSION_MODES = new Set(["allow", "ask", "deny"])
 const VALID_THEMES = new Set(["neutral", "contrast"])
 const VALID_OUTPUT_STYLES = new Set(["text", "json"])
+const THEME_CATALOG = {
+  neutral: "Default low-noise terminal theme.",
+  contrast: "Higher contrast theme for dim terminals and projectors.",
+} as const
+const OUTPUT_STYLE_CATALOG = {
+  text: "Human-readable CLI/TUI output.",
+  json: "Machine-readable stdout for automation.",
+} as const
 
 export type FrontendCommandResult = {
   message?: string
@@ -159,6 +168,174 @@ function runGit(cwd: string, ...args: string[]): GitResult {
       output: "git is not installed.",
     }
   }
+}
+
+function oneclawHome(): string {
+  return expandHome(process.env.ONECLAW_HOME ?? "~/.oneclaw")
+}
+
+function timestampForFile(date = new Date()): string {
+  return date.toISOString().replace(/[:.]/g, "-")
+}
+
+function messageToPlainText(message: Record<string, unknown>): string {
+  const content = Array.isArray(message.content) ? message.content : []
+  return content.map(block => {
+    if (!block || typeof block !== "object") {
+      return ""
+    }
+    const record = block as Record<string, unknown>
+    if (record.type === "text") {
+      return typeof record.text === "string" ? record.text : ""
+    }
+    if (record.type === "tool_result") {
+      return typeof record.result === "string" ? record.result : ""
+    }
+    return ""
+  }).filter(Boolean).join("\n")
+}
+
+async function latestAssistantText(context: FrontendCommandContext): Promise<string> {
+  const session = await context.client.sessionGet(context.sessionId)
+  const messages = Array.isArray(session?.messages) ? session.messages as unknown[] : []
+  for (const message of [...messages].reverse()) {
+    if (!message || typeof message !== "object") {
+      continue
+    }
+    const record = message as Record<string, unknown>
+    if (record.role !== "assistant") {
+      continue
+    }
+    const text = messageToPlainText(record).trim()
+    if (text) {
+      return text
+    }
+  }
+  return ""
+}
+
+async function copyToClipboard(text: string): Promise<{ copied: boolean; target: string }> {
+  const candidates = process.platform === "darwin"
+    ? [{ command: "pbcopy", args: [] as string[], shell: false }]
+    : process.platform === "win32"
+      ? [{ command: "clip", args: [] as string[], shell: true }]
+      : [
+          { command: "wl-copy", args: [] as string[], shell: false },
+          { command: "xclip", args: ["-selection", "clipboard"], shell: false },
+          { command: "xsel", args: ["--clipboard", "--input"], shell: false },
+        ]
+  for (const candidate of candidates) {
+    try {
+      const completed = spawnSync(candidate.command, candidate.args, {
+        input: text,
+        encoding: "utf8",
+        shell: candidate.shell,
+      })
+      if (completed.status === 0) {
+        return {
+          copied: true,
+          target: candidate.command,
+        }
+      }
+    } catch {
+      // Fall back to the durable file below.
+    }
+  }
+  const fallbackPath = join(oneclawHome(), "last_copy.txt")
+  await writeText(fallbackPath, text)
+  return {
+    copied: false,
+    target: fallbackPath,
+  }
+}
+
+async function writeSessionSnapshot(
+  context: FrontendCommandContext,
+  directory: string,
+  label: string,
+): Promise<Record<string, unknown>> {
+  await ensureDir(directory)
+  const [markdown, json] = await Promise.all([
+    context.client.sessionExport(context.sessionId, "markdown"),
+    context.client.sessionExport(context.sessionId, "json"),
+  ])
+  const written: string[] = []
+  if (markdown?.content) {
+    const markdownPath = join(directory, `${label}.md`)
+    await writeText(markdownPath, markdown.content)
+    written.push(markdownPath)
+  }
+  if (json?.content) {
+    const jsonPath = join(directory, `${label}.json`)
+    await writeText(jsonPath, json.content)
+    written.push(jsonPath)
+  }
+  return {
+    sessionId: context.sessionId,
+    directory,
+    written,
+  }
+}
+
+async function initializeProject(cwd: string, force = false): Promise<Record<string, unknown>> {
+  const oneclawDir = join(cwd, ".oneclaw")
+  const created: string[] = []
+  const skipped: string[] = []
+  const files = [
+    {
+      path: join(oneclawDir, "memory.md"),
+      content: "# Project Memory\n\nAdd stable project facts, conventions, and decisions here.\n",
+    },
+    {
+      path: join(oneclawDir, "hooks.json"),
+      content: `${JSON.stringify({ hooks: [] }, null, 2)}\n`,
+    },
+    {
+      path: join(oneclawDir, "README.md"),
+      content: [
+        "# OneClaw Project Runtime",
+        "",
+        "- `memory.md`: project-level memory injected into prompts.",
+        "- `hooks.json`: local hook definitions.",
+        "- `tags/`: named session snapshots created by `/tag`.",
+        "",
+      ].join("\n"),
+    },
+  ]
+  await mkdir(oneclawDir, { recursive: true })
+  for (const file of files) {
+    if (!force && existsSync(file.path)) {
+      skipped.push(file.path)
+      continue
+    }
+    await writeText(file.path, file.content)
+    created.push(file.path)
+  }
+  return {
+    oneclawDir,
+    created,
+    skipped,
+  }
+}
+
+async function releaseNotes(cwd: string): Promise<string> {
+  const candidates = [
+    join(cwd, "RELEASE_NOTES.md"),
+    join(cwd, "CHANGELOG.md"),
+  ]
+  for (const candidate of candidates) {
+    const raw = await readTextIfExists(candidate)
+    if (raw) {
+      return `${basename(candidate)}\n\n${raw}`
+    }
+  }
+  return [
+    `OneClaw ${ONECLAW_NEXT_VERSION}`,
+    "",
+    "- Python kernel + TypeScript frontend.",
+    "- OpenHarness-style provider, tool, MCP, plugin, memory, bridge, and TUI layers.",
+    "- Cross-platform launcher and CI smoke checks.",
+  ].join("\n")
 }
 
 async function listWorkspaceFiles(cwd: string, depth = 2, prefix = ""): Promise<string[]> {
@@ -540,6 +717,206 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   })
 
   registry.register({
+    name: "init",
+    description: "Create project-local OneClaw memory and hook files",
+    handler: async (args, context) => ({
+      message: pretty(await initializeProject(context.cwd, words(args).includes("force"))),
+    }),
+  })
+
+  registry.register({
+    name: "privacy-settings",
+    description: "Show local storage, auth, and network/privacy boundaries",
+    handler: async (_args, context) => {
+      const config = await loadConfig(context.cwd)
+      return {
+        message: pretty({
+          workspace: context.cwd,
+          homeDir: config.homeDir,
+          sessionDir: config.sessionDir,
+          projectRuntimeDir: join(context.cwd, ".oneclaw"),
+          feedbackLog: join(config.homeDir, "feedback.log"),
+          providerKind: config.provider.kind,
+          auth: {
+            bridgeAuthEnabled: Boolean(config.bridge.authToken || (config.bridge.authTokens ?? []).length > 0),
+            providerSecretsStoredExternally: [
+              "~/.codex/auth.json",
+              "~/.claude/.credentials.json",
+              "~/.oneclaw/copilot_auth.json",
+            ],
+          },
+          network: {
+            modelProviderRequests: "enabled by the selected provider",
+            mcpServers: config.mcpServers.map(server => ({
+              name: server.name,
+              transport: server.transport,
+              command: server.command,
+            })),
+          },
+          localPersistence: [
+            "session transcripts",
+            "project/global/session memory",
+            "plugin lifecycle state",
+            "task/team records",
+            "named snapshots created by /share and /tag",
+          ],
+        }),
+      }
+    },
+  })
+
+  registry.register({
+    name: "rate-limit-options",
+    description: "Show provider and runtime levers for rate-limit mitigation",
+    handler: async (_args, context) => {
+      const [state, usage, policy, providers] = await Promise.all([
+        context.client.state(),
+        context.client.usage(),
+        context.client.compactPolicy(context.sessionId),
+        context.client.providers(),
+      ])
+      return {
+        message: pretty({
+          provider: {
+            activeProfile: providers.activeProfile,
+            kind: providers.provider.kind,
+            model: providers.provider.model,
+          },
+          usage,
+          compactPolicy: policy,
+          runtimeLevers: [
+            "/compact to reduce current session context",
+            "/model <model-name> to switch models within the active provider",
+            "/provider use <profile-or-kind> to switch provider profile",
+            "ONECLAW_BUDGET_WARN_USD / ONECLAW_BUDGET_MAX_USD for local budget gates",
+            "Tune context.maxChars and context.keepMessages in oneclaw.config.json",
+          ],
+          state,
+        }),
+      }
+    },
+  })
+
+  registry.register({
+    name: "feedback",
+    description: "Append local product feedback for later triage",
+    handler: async (args, context) => {
+      const feedback = args.trim()
+      if (!feedback) {
+        return { message: "Usage: /feedback <what happened, what you expected>" }
+      }
+      const path = join(oneclawHome(), "feedback.log")
+      await appendText(path, `${new Date().toISOString()}\tcwd=${context.cwd}\tsession=${context.sessionId}\t${feedback}\n`)
+      return {
+        message: `Feedback recorded at ${path}`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "release-notes",
+    description: "Show local release notes or built-in version notes",
+    handler: async (_args, context) => ({
+      message: await releaseNotes(context.cwd),
+    }),
+  })
+
+  registry.register({
+    name: "upgrade",
+    description: "Show source checkout upgrade commands",
+    handler: async (_args, context) => {
+      const remote = runGit(context.cwd, "remote", "get-url", "origin")
+      return {
+        message: [
+          "Source checkout upgrade path:",
+          "",
+          `repo: ${remote.ok ? remote.output : "(origin remote not found)"}`,
+          "1. git pull --ff-only",
+          "2. bun install",
+          "3. bun run ci",
+          "4. one install",
+          "",
+          "If this is an npm/global install, reinstall from the package source you use.",
+        ].join("\n"),
+      }
+    },
+  })
+
+  registry.register({
+    name: "copy",
+    description: "Copy text or the latest assistant response to clipboard",
+    handler: async (args, context) => {
+      const text = args.trim() || await latestAssistantText(context)
+      if (!text) {
+        return { message: "Nothing to copy. Pass text or run after an assistant response." }
+      }
+      const result = await copyToClipboard(text)
+      return {
+        message: result.copied
+          ? `Copied ${text.length} chars via ${result.target}.`
+          : `Clipboard unavailable; wrote ${text.length} chars to ${result.target}.`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "share",
+    description: "Write a durable session snapshot under OneClaw home",
+    handler: async (_args, context) => {
+      const label = `${timestampForFile()}-${slugify(context.sessionId)}`
+      const directory = join(oneclawHome(), "shares", label)
+      return {
+        message: pretty(await writeSessionSnapshot(context, directory, "session")),
+      }
+    },
+  })
+
+  registry.register({
+    name: "tag",
+    description: "Create a named session snapshot",
+    handler: async (args, context) => {
+      const name = args.trim()
+      if (!name) {
+        return { message: "Usage: /tag <name>" }
+      }
+      const label = `${timestampForFile()}-${slugify(context.sessionId)}`
+      const directory = join(oneclawHome(), "tags", slugify(name), label)
+      return {
+        message: pretty({
+          tag: name,
+          ...await writeSessionSnapshot(context, directory, "session"),
+        }),
+      }
+    },
+  })
+
+  registry.register({
+    name: "commit",
+    description: "Create a git commit from current workspace changes",
+    handler: async (args, context) => {
+      const message = args.trim()
+      if (!message) {
+        return { message: "Usage: /commit <message>" }
+      }
+      const status = runGit(context.cwd, "status", "--short")
+      if (!status.ok) {
+        return { message: status.output }
+      }
+      if (!status.output) {
+        return { message: "No changes to commit." }
+      }
+      const add = runGit(context.cwd, "add", "-A")
+      if (!add.ok) {
+        return { message: add.output }
+      }
+      const commit = runGit(context.cwd, "commit", "-m", message)
+      return {
+        message: commit.output,
+      }
+    },
+  })
+
+  registry.register({
     name: "providers",
     description: "Show provider profiles and auth status",
     handler: async (_args, context) => {
@@ -641,14 +1018,37 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     name: "theme",
     description: "Show or persist the active output theme",
     handler: async (args, context) => {
+      const parts = words(args)
       const value = args.trim()
+      if (parts[0] === "list") {
+        return { message: pretty(THEME_CATALOG) }
+      }
+      if (parts[0] === "preview") {
+        const themeName = parts[1] ?? "neutral"
+        if (!VALID_THEMES.has(themeName)) {
+          return { message: "Usage: /theme preview <neutral|contrast>" }
+        }
+        return {
+          message: [
+            `theme: ${themeName}`,
+            `description: ${THEME_CATALOG[themeName as keyof typeof THEME_CATALOG]}`,
+            "",
+            themeName === "contrast"
+              ? "Status: HIGH CONTRAST | Prompt: > | Accent: cyan"
+              : "Status: neutral | Prompt: > | Accent: muted cyan",
+          ].join("\n"),
+        }
+      }
       if (!value || value === "show" || value === "current") {
         const state = await context.client.state()
-        return { message: extractString(state, "theme") }
+        const current = extractString(state, "theme")
+        return {
+          message: `${current}\n${THEME_CATALOG[current as keyof typeof THEME_CATALOG] ?? ""}`.trim(),
+        }
       }
       const nextTheme = value.startsWith("set ") ? value.slice(4).trim() : value
       if (!VALID_THEMES.has(nextTheme)) {
-        return { message: "Usage: /theme [current] | /theme <neutral|contrast>" }
+        return { message: "Usage: /theme [current|list|preview <name>] | /theme <neutral|contrast>" }
       }
       const result = await context.client.updateConfigPatch({
         output: { theme: nextTheme },
@@ -663,14 +1063,29 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     name: "output-style",
     description: "Show or persist the default output style",
     handler: async (args, context) => {
+      const parts = words(args)
       const value = args.trim()
+      if (parts[0] === "list") {
+        return { message: pretty(OUTPUT_STYLE_CATALOG) }
+      }
+      if (parts[0] === "show" && parts[1]) {
+        if (!VALID_OUTPUT_STYLES.has(parts[1])) {
+          return { message: "Usage: /output-style show <text|json>" }
+        }
+        return {
+          message: `${parts[1]}\n${OUTPUT_STYLE_CATALOG[parts[1] as keyof typeof OUTPUT_STYLE_CATALOG]}`,
+        }
+      }
       if (!value || value === "show" || value === "current") {
         const state = await context.client.state()
-        return { message: extractString(state, "outputStyle") }
+        const current = extractString(state, "outputStyle")
+        return {
+          message: `${current}\n${OUTPUT_STYLE_CATALOG[current as keyof typeof OUTPUT_STYLE_CATALOG] ?? ""}`.trim(),
+        }
       }
       const nextStyle = value.startsWith("set ") ? value.slice(4).trim() : value
       if (!VALID_OUTPUT_STYLES.has(nextStyle)) {
-        return { message: "Usage: /output-style [current] | /output-style <text|json>" }
+        return { message: "Usage: /output-style [current|list|show <style>] | /output-style <text|json>" }
       }
       const result = await context.client.updateConfigPatch({
         output: { style: nextStyle },
@@ -1843,6 +2258,22 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       const result = await context.client.clearSession(context.sessionId, clearMemory)
       return {
         message: `Cleared ${result.clearedMessages} messages from ${result.sessionId}${result.clearedMemory ? " and reset session memory" : ""}.`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "rewind",
+    description: "Remove the latest assistant turn(s) from the current session",
+    handler: async (args, context) => {
+      const rawTurns = args.trim()
+      const turns = rawTurns ? Number.parseInt(rawTurns, 10) : 1
+      if (!Number.isFinite(turns) || turns < 1 || turns > 20) {
+        return { message: "Usage: /rewind [turns: 1-20]" }
+      }
+      const result = await context.client.rewindSession(context.sessionId, turns)
+      return {
+        message: `Rewound ${result.removedMessages} messages from ${result.sessionId}; ${result.afterMessages} messages remain.`,
       }
     },
   })

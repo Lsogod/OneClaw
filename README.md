@@ -381,12 +381,15 @@ bun run sandbox:smoke
 | 命令 | 作用 |
 |---|---|
 | `/help` | 查看命令 |
+| `/init` | 初始化项目级 `.oneclaw/` memory 与 hooks 文件 |
 | `/status` | 查看 runtime 状态 |
 | `/context` | 查看 context 与 compact 信息 |
-| `/compact` | 手动 compact |
+| `/compact` / `/rewind` | 手动 compact 或回退最近 assistant turn |
 | `/cost` / `/usage` | 查看 token 和成本 |
 | `/sessions` / `/resume` | 管理 session |
+| `/share` / `/tag` / `/copy` | 导出、标记或复制当前会话内容 |
 | `/provider` / `/profile` / `/model` | 管理 provider |
+| `/theme` / `/output-style` | 管理 TUI/CLI 输出偏好 |
 | `/tools` | 查看 tool registry |
 | `/mcp` | 管理 MCP |
 | `/plugin` / `/skills` | 管理 plugin 与 skills |
@@ -394,6 +397,8 @@ bun run sandbox:smoke
 | `/tasks` / `/agents` | 管理 task 与 team |
 | `/bridge` | 管理 bridge 控制面 |
 | `/doctor` | 环境诊断 |
+| `/privacy-settings` / `/rate-limit-options` | 查看本地隐私边界和限流治理建议 |
+| `/feedback` / `/release-notes` / `/upgrade` | 本地反馈、发布说明和源码升级提示 |
 
 ---
 

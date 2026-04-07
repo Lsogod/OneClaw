@@ -128,7 +128,11 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       cwd: "/tmp/workspace",
       createdAt: "2026-04-07T00:00:00Z",
       updatedAt: "2026-04-07T00:00:00Z",
-      messages: [],
+      messages: [{
+        role: "assistant",
+        createdAt: "2026-04-07T00:00:00Z",
+        content: [{ type: "text", text: "latest assistant response" }],
+      }],
     }),
     clearSession: async (sessionId: string, clearMemory = false) => ({
       sessionId,
@@ -141,6 +145,13 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       afterMessages: 2,
       compactedMessages: 6,
       memoryUpdated: true,
+    }),
+    rewindSession: async (sessionId: string, turns = 1) => ({
+      sessionId,
+      beforeMessages: 6,
+      afterMessages: 4,
+      removedMessages: 2,
+      turns,
     }),
     compactPolicy: async (sessionId?: string) => ({
       sessionId: sessionId ?? "session_current",
@@ -279,6 +290,78 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/plan")
     expect(helpText).toContain("/review")
     expect(helpText).toContain("/agents")
+    expect(helpText).toContain("/init")
+    expect(helpText).toContain("/share")
+    expect(helpText).toContain("/tag")
+    expect(helpText).toContain("/rewind")
+    expect(helpText).toContain("/privacy-settings")
+    expect(helpText).toContain("/rate-limit-options")
+    expect(helpText).toContain("/feedback")
+  })
+
+  test("OpenHarness-style utility commands manage project and session snapshots", async () => {
+    const originalHome = process.env.ONECLAW_HOME
+    const homeDir = join(tmpdir(), `oneclaw-openharness-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const workspace = join(tmpdir(), `oneclaw-openharness-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    await mkdir(homeDir, { recursive: true })
+    await mkdir(workspace, { recursive: true })
+    process.env.ONECLAW_HOME = homeDir
+
+    try {
+      const registry = createFrontendCommandRegistry()
+      const context = {
+        client: createFakeClient(),
+        sessionId: "session_current",
+        cwd: workspace,
+      } as never
+
+      const initLookup = registry.lookup("/init")
+      const shareLookup = registry.lookup("/share")
+      const tagLookup = registry.lookup("/tag release candidate")
+      const feedbackLookup = registry.lookup("/feedback command parity is useful")
+      const copyLookup = registry.lookup("/copy explicit text")
+      const privacyLookup = registry.lookup("/privacy-settings")
+      const rateLimitLookup = registry.lookup("/rate-limit-options")
+      const releaseNotesLookup = registry.lookup("/release-notes")
+      const upgradeLookup = registry.lookup("/upgrade")
+      const themeLookup = registry.lookup("/theme list")
+      const outputStyleLookup = registry.lookup("/output-style list")
+      const rewindLookup = registry.lookup("/rewind 2")
+
+      const initResult = await initLookup?.command.handler(initLookup.args, context)
+      const shareResult = await shareLookup?.command.handler(shareLookup.args, context)
+      const tagResult = await tagLookup?.command.handler(tagLookup.args, context)
+      const feedbackResult = await feedbackLookup?.command.handler(feedbackLookup.args, context)
+      const copyResult = await copyLookup?.command.handler(copyLookup.args, context)
+      const privacyResult = await privacyLookup?.command.handler(privacyLookup.args, context)
+      const rateLimitResult = await rateLimitLookup?.command.handler(rateLimitLookup.args, context)
+      const releaseNotesResult = await releaseNotesLookup?.command.handler(releaseNotesLookup.args, context)
+      const upgradeResult = await upgradeLookup?.command.handler(upgradeLookup.args, context)
+      const themeResult = await themeLookup?.command.handler(themeLookup.args, context)
+      const outputStyleResult = await outputStyleLookup?.command.handler(outputStyleLookup.args, context)
+      const rewindResult = await rewindLookup?.command.handler(rewindLookup.args, context)
+
+      expect(initResult?.message).toContain(".oneclaw")
+      expect(existsSync(join(workspace, ".oneclaw", "memory.md"))).toBe(true)
+      expect(shareResult?.message).toContain("shares")
+      expect(tagResult?.message).toContain("release candidate")
+      expect(existsSync(join(homeDir, "feedback.log"))).toBe(true)
+      expect(feedbackResult?.message).toContain("Feedback recorded")
+      expect(copyResult?.message).toContain("chars")
+      expect(privacyResult?.message).toContain("localPersistence")
+      expect(rateLimitResult?.message).toContain("runtimeLevers")
+      expect(releaseNotesResult?.message).toContain("OneClaw 0.2.0")
+      expect(upgradeResult?.message).toContain("git pull --ff-only")
+      expect(themeResult?.message).toContain("neutral")
+      expect(outputStyleResult?.message).toContain("json")
+      expect(rewindResult?.message).toContain("Rewound 2 messages")
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ONECLAW_HOME
+      } else {
+        process.env.ONECLAW_HOME = originalHome
+      }
+    }
   })
 
   test("provider command resolves provider kind to profile name", async () => {

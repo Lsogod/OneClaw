@@ -152,6 +152,11 @@ def main() -> int:
                 result = kernel.delete_session(params["sessionId"])
             elif method == "session_compact":
                 result = kernel.compact_session(params["sessionId"])
+            elif method == "session_rewind":
+                result = kernel.rewind_session(
+                    params["sessionId"],
+                    int(params.get("turns") or 1),
+                )
             elif method == "session_export":
                 result = kernel.export_session(
                     params["sessionId"],

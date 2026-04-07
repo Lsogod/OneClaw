@@ -561,6 +561,25 @@ export default {
             self.assertIn("hello", bundle["markdown"])
             kernel.shutdown()
 
+    def test_rewind_session_removes_latest_assistant_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            os.environ["ONECLAW_HOME"] = root
+            os.environ["ONECLAW_PROVIDER"] = "internal-test"
+            kernel = OneClawKernel(root)
+            result = kernel.run_prompt("hello", cwd=root)
+            session_id = result["sessionId"]
+            before = kernel._load_session(session_id)
+            assert before is not None
+            before_message_count = len(before["messages"])
+            self.assertGreaterEqual(before_message_count, 2)
+            rewind = kernel.rewind_session(session_id, 1)
+            after = kernel._load_session(session_id)
+            assert after is not None
+            self.assertGreater(rewind["removedMessages"], 0)
+            self.assertLess(len(after["messages"]), before_message_count)
+            self.assertEqual(rewind["afterMessages"], len(after["messages"]))
+            kernel.shutdown()
+
     def test_delete_session_removes_snapshot_and_memory(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             os.environ["ONECLAW_HOME"] = root

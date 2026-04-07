@@ -1668,6 +1668,41 @@ class OneClawKernel:
             "memoryUpdated": True,
         }
 
+    def rewind_session(self, session_id: str, turns: int = 1) -> dict[str, Any]:
+        session = self._load_session(session_id)
+        if not session:
+            raise RuntimeError(f"Session not found: {session_id}")
+        normalized_turns = max(1, int(turns))
+        before_messages = len(session["messages"])
+        remove_from = before_messages
+        assistant_turns = 0
+        for index in range(before_messages - 1, -1, -1):
+            message = session["messages"][index]
+            if message.get("role") == "assistant":
+                assistant_turns += 1
+                remove_from = index
+            if assistant_turns >= normalized_turns:
+                break
+        if assistant_turns == 0:
+            return {
+                "sessionId": session_id,
+                "beforeMessages": before_messages,
+                "afterMessages": before_messages,
+                "removedMessages": 0,
+                "turns": normalized_turns,
+            }
+        session["messages"] = session["messages"][:remove_from]
+        session["updatedAt"] = now_iso()
+        self.sessions[session_id] = session
+        self._persist_session(session)
+        return {
+            "sessionId": session_id,
+            "beforeMessages": before_messages,
+            "afterMessages": len(session["messages"]),
+            "removedMessages": before_messages - len(session["messages"]),
+            "turns": normalized_turns,
+        }
+
     def compact_policy(self, session_id: str | None = None) -> dict[str, Any]:
         session = self._load_session(session_id) if session_id else None
         message_count = len(session["messages"]) if session else 0

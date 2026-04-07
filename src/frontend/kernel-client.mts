@@ -300,6 +300,16 @@ export class KernelClient {
     }>("session_compact", { sessionId })
   }
 
+  rewindSession(sessionId: string, turns = 1) {
+    return this.request<{
+      sessionId: string
+      beforeMessages: number
+      afterMessages: number
+      removedMessages: number
+      turns: number
+    }>("session_rewind", { sessionId, turns })
+  }
+
   sessionExport(sessionId: string, format: "json" | "markdown" = "json") {
     return this.request<{
       sessionId: string
