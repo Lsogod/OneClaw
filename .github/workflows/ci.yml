@@ -45,7 +45,7 @@ jobs:
 
     env:
       ONECLAW_PROVIDER: internal-test
-      ONECLAW_HOME: ${{ runner.temp }}/oneclaw-home
+      ONECLAW_HOME: ${{ github.workspace }}/.oneclaw-ci
 
     steps:
       - name: Checkout
