@@ -165,6 +165,90 @@ def walk_files(root: str, depth: int = 3, prefix: str = "") -> list[str]:
     return sorted(set(results))
 
 
+SYMBOL_EXTENSIONS = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cs",
+    ".go",
+    ".h",
+    ".hpp",
+    ".java",
+    ".js",
+    ".jsx",
+    ".kt",
+    ".mts",
+    ".mjs",
+    ".py",
+    ".rs",
+    ".swift",
+    ".ts",
+    ".tsx",
+}
+
+
+SYMBOL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("class", re.compile(r"^\s*(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)")),
+    ("interface", re.compile(r"^\s*(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)")),
+    ("type", re.compile(r"^\s*(?:export\s+)?type\s+([A-Za-z_$][\w$]*)\s*=")),
+    ("enum", re.compile(r"^\s*(?:export\s+)?enum\s+([A-Za-z_$][\w$]*)")),
+    ("function", re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)")),
+    ("function", re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>")),
+    ("class", re.compile(r"^\s*class\s+([A-Za-z_]\w*)")),
+    ("function", re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(")),
+    ("function", re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(")),
+    ("function", re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*\(")),
+]
+
+
+IGNORED_SYMBOL_DIRS = {".git", ".hg", ".svn", ".venv", "__pycache__", "dist", "node_modules", "release", "target"}
+
+
+def collect_code_symbols(root: str, cwd: str, query: str = "", limit: int = 200) -> list[dict[str, Any]]:
+    root_path = Path(root)
+    if root_path.is_file():
+        candidates = [root_path]
+    else:
+        candidates = [
+            path
+            for path in root_path.rglob("*")
+            if path.is_file()
+            and path.suffix in SYMBOL_EXTENSIONS
+            and not any(part in IGNORED_SYMBOL_DIRS for part in path.parts)
+        ]
+    lowered_query = query.strip().lower()
+    bounded_limit = max(1, min(int(limit or 200), 1000))
+    symbols: list[dict[str, Any]] = []
+    for file_path in sorted(candidates):
+        try:
+            if file_path.stat().st_size > 1_000_000:
+                continue
+            lines = file_path.read_text("utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue
+        display = display_path(cwd, str(file_path))
+        for line_number, line in enumerate(lines, start=1):
+            for kind, pattern in SYMBOL_PATTERNS:
+                match = pattern.search(line)
+                if not match:
+                    continue
+                name = match.group(1)
+                haystack = f"{name} {display} {line}".lower()
+                if lowered_query and lowered_query not in haystack:
+                    break
+                symbols.append({
+                    "name": name,
+                    "kind": kind,
+                    "file": display,
+                    "line": line_number,
+                    "text": line.strip(),
+                })
+                if len(symbols) >= bounded_limit:
+                    return symbols
+                break
+    return symbols
+
+
 def parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
     if not raw.startswith("---\n"):
         return {}, raw
@@ -2259,6 +2343,19 @@ class OneClawKernel:
                 "inputSchema": {"type": "object", "properties": {"cwd": {"type": "string"}}},
             },
             {
+                "name": "code_symbols",
+                "description": "Index code symbols such as classes, functions, interfaces, and types in the workspace.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "query": {"type": "string"},
+                        "limit": {"type": "number"},
+                    },
+                },
+            },
+            {
                 "name": "web_fetch",
                 "description": "Fetch a HTTP(S) URL and return readable text content.",
                 "readOnly": True,
@@ -2365,7 +2462,7 @@ class OneClawKernel:
             candidate_paths.append(os.path.realpath(os.path.join(session["cwd"], input_payload["path"])))
         if isinstance(input_payload.get("cwd"), str):
             candidate_paths.append(os.path.realpath(os.path.join(session["cwd"], input_payload["cwd"])))
-        if tool_name in {"list_files", "read_file", "search_files", "glob_files", "run_shell", "workspace_status"} and not candidate_paths:
+        if tool_name in {"list_files", "read_file", "search_files", "glob_files", "run_shell", "workspace_status", "code_symbols"} and not candidate_paths:
             candidate_paths.append(session["cwd"])
         for candidate in candidate_paths:
             if not is_inside_roots(candidate, self._permission_roots()):
@@ -2639,6 +2736,19 @@ class OneClawKernel:
             "text": limit_text(text.strip(), bounded_max),
         }
 
+    def code_symbols(self, path: str | None = None, query: str = "", limit: int = 200) -> dict[str, Any]:
+        target_path = os.path.realpath(os.path.join(self.cwd, path or "."))
+        if not Path(target_path).exists():
+            raise RuntimeError(f"Symbol path not found: {path or '.'}")
+        symbols = collect_code_symbols(target_path, self.cwd, query, limit)
+        return {
+            "cwd": self.cwd,
+            "path": display_path(self.cwd, target_path),
+            "query": query,
+            "count": len(symbols),
+            "symbols": symbols,
+        }
+
     def web_search(self, query: str, max_results: int = 5, timeout_ms: int = 10000) -> dict[str, Any]:
         search_query = query.strip()
         if not search_query:
@@ -2808,6 +2918,20 @@ class OneClawKernel:
                     "## diff stat",
                     str(diff.get("output") or "(no diff)"),
                 ]),
+            }
+        if name == "code_symbols":
+            target_path = os.path.realpath(os.path.join(cwd, str(input_payload.get("path", "."))))
+            query = str(input_payload.get("query") or "")
+            limit = int(input_payload.get("limit") or 200)
+            symbols = collect_code_symbols(target_path, cwd, query, limit)
+            return {
+                "ok": True,
+                "output": json.dumps({
+                    "path": display_path(cwd, target_path),
+                    "query": query,
+                    "count": len(symbols),
+                    "symbols": symbols,
+                }, indent=2),
             }
         if name == "web_fetch":
             url = input_payload.get("url")

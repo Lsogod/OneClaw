@@ -257,6 +257,19 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       contentType: "text/plain",
       text: `fetched ${url} ${options?.maxChars ?? 8000}`,
     }),
+    codeSymbols: async (options?: { path?: string; query?: string; limit?: number }) => ({
+      cwd: "/tmp/workspace",
+      path: options?.path ?? ".",
+      query: options?.query ?? "",
+      count: 1,
+      symbols: [{
+        name: "OneClawRuntime",
+        kind: "class",
+        file: "src/runtime.ts",
+        line: 12,
+        text: "class OneClawRuntime {}",
+      }].slice(0, options?.limit ?? 200),
+    }),
     webSearch: async (query: string, options?: { maxResults?: number }) => ({
       query,
       url: `https://search.example/?q=${encodeURIComponent(query)}`,
@@ -344,6 +357,7 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/branch")
     expect(helpText).toContain("/diff")
     expect(helpText).toContain("/files")
+    expect(helpText).toContain("/symbols")
     expect(helpText).toContain("/fetch")
     expect(helpText).toContain("/search-web")
     expect(helpText).toContain("/todo")
@@ -1452,8 +1466,9 @@ describe("Frontend command registry", () => {
     expect(result?.message).toContain("src/index.ts")
   })
 
-  test("fetch, web search, and todo commands use kernel-backed management RPCs", async () => {
+  test("symbols, fetch, web search, and todo commands use kernel-backed management RPCs", async () => {
     const registry = createFrontendCommandRegistry()
+    const symbolsLookup = registry.lookup("/symbols OneClaw --path src --limit 5")
     const fetchLookup = registry.lookup("/fetch https://example.test/page 1200")
     const searchLookup = registry.lookup("/search-web oneclaw harness --limit 1")
     const todoListLookup = registry.lookup("/todo")
@@ -1478,6 +1493,7 @@ describe("Frontend command registry", () => {
       cwd: "/tmp/workspace",
     } as never
 
+    const symbolsResult = await symbolsLookup?.command.handler(symbolsLookup.args, context)
     const fetchResult = await fetchLookup?.command.handler(fetchLookup.args, context)
     const searchResult = await searchLookup?.command.handler(searchLookup.args, context)
     const listResult = await todoListLookup?.command.handler(todoListLookup.args, context)
@@ -1485,6 +1501,8 @@ describe("Frontend command registry", () => {
     const doneResult = await todoDoneLookup?.command.handler(todoDoneLookup.args, context)
     const clearResult = await todoClearLookup?.command.handler(todoClearLookup.args, context)
 
+    expect(symbolsResult?.message).toContain("OneClawRuntime")
+    expect(symbolsResult?.message).toContain("src/runtime.ts")
     expect(fetchResult?.message).toContain("https://example.test/page")
     expect(fetchResult?.message).toContain("fetched")
     expect(searchResult?.message).toContain("oneclaw harness")

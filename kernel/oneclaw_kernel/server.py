@@ -179,6 +179,12 @@ def main() -> int:
                     int(params.get("maxChars") or 8000),
                     int(params.get("timeoutMs") or 10000),
                 )
+            elif method == "code_symbols":
+                result = kernel.code_symbols(
+                    params.get("path"),
+                    str(params.get("query") or ""),
+                    int(params.get("limit") or 200),
+                )
             elif method == "web_search":
                 result = kernel.web_search(
                     params["query"],

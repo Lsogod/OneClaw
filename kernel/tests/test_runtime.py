@@ -80,6 +80,10 @@ class KernelRuntimeTests(unittest.TestCase):
             }), "utf-8")
             kernel = OneClawKernel(root)
             Path(root, "README.md").write_text("hello old\n", "utf-8")
+            Path(root, "app.ts").write_text(
+                "export class OneClawApp {}\nexport function runOneClaw() {}\n",
+                "utf-8",
+            )
             session = kernel.create_session(root)
 
             globbed = kernel._execute_tool({"name": "glob_files", "input": {"pattern": "*.md"}}, session)
@@ -91,12 +95,20 @@ class KernelRuntimeTests(unittest.TestCase):
                 "name": "todo_update",
                 "input": {"items": [{"title": "ship", "status": "pending"}]},
             }, session)
+            symbols = kernel.code_symbols(".", "OneClaw", 10)
+            symbol_tool = kernel._execute_tool({
+                "name": "code_symbols",
+                "input": {"query": "runOneClaw", "limit": 10},
+            }, session)
 
             self.assertTrue(globbed["ok"])
             self.assertIn("README.md", globbed["output"])
             self.assertTrue(edited["ok"])
             self.assertIn("hello new", Path(root, "README.md").read_text("utf-8"))
             self.assertTrue(todo["ok"])
+            self.assertEqual(symbols["symbols"][0]["name"], "OneClawApp")
+            self.assertTrue(symbol_tool["ok"])
+            self.assertIn("runOneClaw", symbol_tool["output"])
             self.assertGreaterEqual(kernel.tools_info()["count"], 1)
             self.assertEqual(kernel.compact_policy(session["id"])["sessionId"], session["id"])
             self.assertEqual(kernel.context_info(session["id"])["session"]["id"], session["id"])

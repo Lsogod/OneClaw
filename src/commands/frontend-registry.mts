@@ -2204,6 +2204,39 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   })
 
   registry.register({
+    name: "symbols",
+    description: "Index or search workspace code symbols",
+    handler: async (args, context) => {
+      const parts = words(args)
+      let limit = 200
+      let path = "."
+      const limitIndex = parts.findIndex(part => part === "--limit" || part === "-n")
+      if (limitIndex >= 0) {
+        const parsed = Number.parseInt(parts[limitIndex + 1] ?? "", 10)
+        if (!Number.isFinite(parsed) || parsed < 1 || parsed > 1000) {
+          return { message: "Usage: /symbols [query] [--path <path>] [--limit 1-1000]" }
+        }
+        limit = parsed
+        parts.splice(limitIndex, 2)
+      }
+      const pathIndex = parts.findIndex(part => part === "--path" || part === "-p")
+      if (pathIndex >= 0) {
+        const target = parts[pathIndex + 1]
+        if (!target) {
+          return { message: "Usage: /symbols [query] [--path <path>] [--limit 1-1000]" }
+        }
+        path = target
+        parts.splice(pathIndex, 2)
+      }
+      const query = parts.join(" ").trim()
+      const payload = await context.client.codeSymbols({ path, query, limit })
+      return {
+        message: pretty(payload),
+      }
+    },
+  })
+
+  registry.register({
     name: "fetch",
     description: "Fetch a HTTP(S) URL through the kernel web_fetch tool",
     handler: async (args, context) => {

@@ -353,6 +353,16 @@ export class KernelClient {
     }>("web_fetch", { url, ...options })
   }
 
+  codeSymbols(options: { path?: string; query?: string; limit?: number } = {}) {
+    return this.request<{
+      cwd: string
+      path: string
+      query: string
+      count: number
+      symbols: Array<{ name: string; kind: string; file: string; line: number; text: string }>
+    }>("code_symbols", options)
+  }
+
   webSearch(query: string, options: { maxResults?: number; timeoutMs?: number } = {}) {
     return this.request<{
       query: string

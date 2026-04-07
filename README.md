@@ -400,6 +400,7 @@ bun run sandbox:smoke
 | `/continue` | 基于当前 session 继续执行 |
 | `/tools` | 查看 tool registry |
 | `/todo` | 管理当前 session 的 todo 状态 |
+| `/symbols` | 通过 kernel `code_symbols` 索引或搜索代码符号 |
 | `/fetch` | 通过 kernel `web_fetch` 读取 HTTP(S) URL |
 | `/search-web` | 通过 kernel `web_search` 搜索网页 |
 | `/mcp` | 管理 MCP |
