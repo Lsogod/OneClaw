@@ -16,7 +16,7 @@ describe("KernelClient approvals", () => {
     const client = new KernelClient(root)
 
     try {
-      const result = await client.runPrompt("run shell pwd", {
+      const result = await client.runPrompt("run shell echo oneclaw-approved", {
         cwd: root,
         onApprovalRequest: async request => {
           expect(request.toolName).toBe("run_shell")
@@ -25,7 +25,7 @@ describe("KernelClient approvals", () => {
       })
 
       expect(result.text).toContain("Tool results received")
-      expect(result.text).toContain(root)
+      expect(result.text).toContain("oneclaw-approved")
     } finally {
       await client.close()
       if (originalHome === undefined) {

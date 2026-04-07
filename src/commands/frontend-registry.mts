@@ -172,7 +172,7 @@ async function listWorkspaceFiles(cwd: string, depth = 2, prefix = ""): Promise<
     if (ignored.has(entry.name)) {
       continue
     }
-    const display = prefix ? join(prefix, entry.name) : entry.name
+    const display = prefix ? `${prefix}/${entry.name}` : entry.name
     results.push(display)
     if (entry.isDirectory() && depth > 0) {
       results.push(...await listWorkspaceFiles(join(cwd, entry.name), depth - 1, display))
