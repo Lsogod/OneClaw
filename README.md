@@ -395,6 +395,9 @@ bun run sandbox:smoke
 | `/provider` / `/profile` / `/model` | 管理 provider |
 | `/theme` / `/output-style` | 管理 TUI/CLI 输出偏好 |
 | `/keybindings` | 查看或持久化快捷键映射 |
+| `/fast` / `/effort` / `/passes` / `/turns` | 管理运行时速度、推理强度和 query loop 上限 |
+| `/vim` / `/voice` | 持久化前端输入模式 hint 和 voice keyterms |
+| `/continue` | 基于当前 session 继续执行 |
 | `/tools` | 查看 tool registry |
 | `/mcp` | 管理 MCP |
 | `/plugin` / `/skills` / `/hooks` | 管理 plugin、skills 与 lifecycle hooks |

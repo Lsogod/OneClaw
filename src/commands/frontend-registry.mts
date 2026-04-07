@@ -24,6 +24,7 @@ const ONECLAW_NEXT_VERSION = "0.2.0"
 const VALID_PERMISSION_MODES = new Set(["allow", "ask", "deny"])
 const VALID_THEMES = new Set(["neutral", "contrast"])
 const VALID_OUTPUT_STYLES = new Set(["text", "json"])
+const VALID_RUNTIME_EFFORTS = new Set(["low", "medium", "high", "xhigh"])
 const VALID_HOOK_EVENTS = new Set([
   "session_start",
   "session_end",
@@ -121,6 +122,62 @@ function quote(value: unknown): string {
 function extractString(record: Record<string, unknown>, key: string, fallback = "unknown"): string {
   const value = record[key]
   return typeof value === "string" && value.trim() ? value : fallback
+}
+
+function extractBoolean(record: Record<string, unknown>, key: string, fallback = false): boolean {
+  const value = record[key]
+  return typeof value === "boolean" ? value : fallback
+}
+
+function toggleValue(raw: string, current: boolean): boolean | null {
+  if (!raw || raw === "show" || raw === "current") {
+    return null
+  }
+  if (raw === "toggle") {
+    return !current
+  }
+  if (["on", "true", "1", "yes"].includes(raw)) {
+    return true
+  }
+  if (["off", "false", "0", "no"].includes(raw)) {
+    return false
+  }
+  return null
+}
+
+function parseBoundedPositiveInt(raw: string, min: number, max: number): number | null {
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return null
+  }
+  return parsed
+}
+
+function extractVoiceKeyterms(text: string): string[] {
+  const stopwords = new Set([
+    "about",
+    "after",
+    "before",
+    "from",
+    "have",
+    "into",
+    "that",
+    "this",
+    "with",
+    "your",
+  ])
+  const terms: string[] = []
+  for (const match of text.toLowerCase().matchAll(/[\p{L}\p{N}][\p{L}\p{N}_-]{1,}/gu)) {
+    const term = match[0]
+    if (stopwords.has(term) || terms.includes(term)) {
+      continue
+    }
+    terms.push(term)
+    if (terms.length >= 12) {
+      break
+    }
+  }
+  return terms
 }
 
 async function listSessions(
@@ -1133,6 +1190,178 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       })
       return {
         message: `Persisted model ${extractString(result.state, "model", nextModel)} to ${result.path}`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "fast",
+    description: "Toggle fast runtime mode hint",
+    handler: async (args, context) => {
+      const state = await context.client.state()
+      const current = extractBoolean(state, "fastMode")
+      const requested = args.trim().toLowerCase()
+      const nextValue = toggleValue(requested, current)
+      if (nextValue === null) {
+        if (!requested || requested === "show" || requested === "current") {
+          return { message: `fastMode: ${current}` }
+        }
+        return { message: "Usage: /fast [show|on|off|toggle]" }
+      }
+      const result = await context.client.updateConfigPatch({
+        runtime: { fastMode: nextValue },
+      })
+      return {
+        message: `Persisted fastMode ${extractBoolean(result.state, "fastMode", nextValue)} to ${result.path}`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "effort",
+    description: "Show or persist reasoning effort hint",
+    handler: async (args, context) => {
+      const value = args.trim().toLowerCase()
+      if (!value || value === "show" || value === "current") {
+        const state = await context.client.state()
+        return { message: `effort: ${extractString(state, "effort", "medium")}` }
+      }
+      const nextEffort = value.startsWith("set ") ? value.slice(4).trim() : value
+      if (!VALID_RUNTIME_EFFORTS.has(nextEffort)) {
+        return { message: "Usage: /effort [show] | /effort <low|medium|high|xhigh>" }
+      }
+      const result = await context.client.updateConfigPatch({
+        runtime: { effort: nextEffort },
+      })
+      return {
+        message: `Persisted effort ${extractString(result.state, "effort", nextEffort)} to ${result.path}`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "passes",
+    description: "Show or persist maximum tool/model query passes",
+    handler: async (args, context) => {
+      const value = args.trim().toLowerCase()
+      if (!value || value === "show" || value === "current") {
+        const state = await context.client.state()
+        return { message: `maxPasses: ${state.maxPasses ?? "default"}` }
+      }
+      const nextPasses = value.startsWith("set ") ? value.slice(4).trim() : value
+      const parsed = parseBoundedPositiveInt(nextPasses, 1, 50)
+      if (parsed === null) {
+        return { message: "Usage: /passes [show] | /passes <1-50>" }
+      }
+      const result = await context.client.updateConfigPatch({
+        runtime: { maxPasses: parsed },
+      })
+      return {
+        message: `Persisted maxPasses ${result.state.maxPasses ?? parsed} to ${result.path}`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "turns",
+    description: "Show or persist maximum user turns per session",
+    handler: async (args, context) => {
+      const value = args.trim().toLowerCase()
+      if (!value || value === "show" || value === "current") {
+        const state = await context.client.state()
+        return { message: `maxTurns: ${state.maxTurns ?? "default"}` }
+      }
+      const nextTurns = value.startsWith("set ") ? value.slice(4).trim() : value
+      const parsed = parseBoundedPositiveInt(nextTurns, 1, 500)
+      if (parsed === null) {
+        return { message: "Usage: /turns [show] | /turns <1-500>" }
+      }
+      const result = await context.client.updateConfigPatch({
+        runtime: { maxTurns: parsed },
+      })
+      return {
+        message: `Persisted maxTurns ${result.state.maxTurns ?? parsed} to ${result.path}`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "continue",
+    description: "Ask the agent to continue from the current session",
+    handler: async (args, context) => {
+      const instruction = args.trim()
+      const prompt = [
+        "Continue from the current session state.",
+        "Do not repeat prior conclusions unless needed for continuity.",
+        instruction ? `Additional instruction: ${instruction}` : "",
+      ].filter(Boolean).join("\n")
+      return {
+        message: await runCommandPrompt(context, prompt, {
+          via: "slash-command",
+          command: "continue",
+        }),
+      }
+    },
+  })
+
+  registry.register({
+    name: "vim",
+    description: "Toggle Vim-style input hint for compatible frontends",
+    handler: async (args, context) => {
+      const state = await context.client.state()
+      const current = extractBoolean(state, "vimMode")
+      const requested = args.trim().toLowerCase()
+      const nextValue = toggleValue(requested, current)
+      if (nextValue === null) {
+        if (!requested || requested === "show" || requested === "current") {
+          return { message: `vimMode: ${current}` }
+        }
+        return { message: "Usage: /vim [show|on|off|toggle]" }
+      }
+      const result = await context.client.updateConfigPatch({
+        runtime: { vimMode: nextValue },
+      })
+      return {
+        message: `Persisted vimMode ${extractBoolean(result.state, "vimMode", nextValue)} to ${result.path}`,
+      }
+    },
+  })
+
+  registry.register({
+    name: "voice",
+    description: "Toggle voice-mode hints and extract voice keyterms",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const state = await context.client.state()
+      const current = extractBoolean(state, "voiceMode")
+      if (parts[0] === "keyterms") {
+        const keyterms = extractVoiceKeyterms(args.replace(/^keyterms\s*/i, ""))
+        const result = await context.client.updateConfigPatch({
+          runtime: { voiceKeyterms: keyterms },
+        })
+        return {
+          message: `Persisted ${keyterms.length} voice keyterm(s) to ${result.path}: ${keyterms.join(", ") || "(none)"}`,
+        }
+      }
+      const requested = (parts[0] ?? "").toLowerCase()
+      const nextValue = toggleValue(requested, current)
+      if (nextValue === null) {
+        if (!requested || requested === "show" || requested === "current") {
+          return {
+            message: pretty({
+              voiceMode: current,
+              keyterms: Array.isArray(state.voiceKeyterms) ? state.voiceKeyterms : [],
+              note: "Voice capture is a frontend hint; external audio capture is not bundled.",
+            }),
+          }
+        }
+        return { message: "Usage: /voice [show|on|off|toggle|keyterms <text>]" }
+      }
+      const result = await context.client.updateConfigPatch({
+        runtime: { voiceMode: nextValue },
+      })
+      return {
+        message: `Persisted voiceMode ${extractBoolean(result.state, "voiceMode", nextValue)} to ${result.path}`,
       }
     },
   })

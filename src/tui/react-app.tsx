@@ -38,6 +38,12 @@ type RuntimeStateView = {
   permissionMode?: string
   totalInputTokens?: number
   totalOutputTokens?: number
+  fastMode?: boolean
+  effort?: string
+  maxPasses?: number
+  maxTurns?: number
+  vimMode?: boolean
+  voiceMode?: boolean
   sandbox?: {
     enabled?: boolean
     available?: boolean
@@ -343,6 +349,10 @@ export function resolveStatusBarStats(runtimeState: RuntimeStateView, usage: Usa
     mcpConnected: String(runtimeState.mcpConnected ?? 0),
     pluginCount: String(runtimeState.pluginCount ?? 0),
     estimatedCostUsd: Number(usage.estimatedCostUsd ?? runtimeState.estimatedCostUsd ?? 0),
+    effort: String(runtimeState.effort ?? "medium"),
+    fastMode: Boolean(runtimeState.fastMode),
+    vimMode: Boolean(runtimeState.vimMode),
+    voiceMode: Boolean(runtimeState.voiceMode),
   }
 }
 
@@ -1184,7 +1194,7 @@ function StatusBar(props: {
     <Box flexDirection="column">
       <Text dim>{"─".repeat(96)}</Text>
       <Text dim>
-        {`provider: ${stats.provider} │ profile: ${stats.profile} │ model: ${stats.model} │ mode: ${stats.permissionMode} │ tokens: ${stats.tokensIn}↓ ${stats.tokensOut}↑ │ mcp: ${stats.mcpConnected} │ plugins: ${stats.pluginCount} │ sessions: ${props.sessionCount} │ ${bridgeSummary} │ cost: $${stats.estimatedCostUsd.toFixed(4)}${props.running ? ` │ running ${props.activeRequestId ?? props.selectedSessionId}` : ""}`}
+        {`provider: ${stats.provider} │ profile: ${stats.profile} │ model: ${stats.model} │ mode: ${stats.permissionMode} │ effort: ${stats.effort}${stats.fastMode ? " fast" : ""}${stats.vimMode ? " vim" : ""}${stats.voiceMode ? " voice" : ""} │ tokens: ${stats.tokensIn}↓ ${stats.tokensOut}↑ │ mcp: ${stats.mcpConnected} │ plugins: ${stats.pluginCount} │ sessions: ${props.sessionCount} │ ${bridgeSummary} │ cost: $${stats.estimatedCostUsd.toFixed(4)}${props.running ? ` │ running ${props.activeRequestId ?? props.selectedSessionId}` : ""}`}
       </Text>
     </Box>
   )

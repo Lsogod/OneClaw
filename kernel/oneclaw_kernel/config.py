@@ -146,6 +146,25 @@ def _parse_number_env(name: str) -> int | float | None:
     return int(parsed) if parsed.is_integer() else parsed
 
 
+def _parse_bool_env(name: str) -> bool | None:
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    normalized = raw.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _parse_effort_env(name: str) -> str | None:
+    raw = os.environ.get(name)
+    if raw in {"low", "medium", "high", "xhigh"}:
+        return raw
+    return None
+
+
 def _config_candidates(cwd: str, home_dir: str) -> list[str]:
     candidates = [
         str(Path(home_dir) / "oneclaw.config.json"),
@@ -248,6 +267,15 @@ def load_config(cwd: str | None = None) -> dict[str, Any]:
             "theme": "neutral",
             "keybindings": copy.deepcopy(DEFAULT_KEYBINDINGS),
         },
+        "runtime": {
+            "fastMode": False,
+            "effort": "medium",
+            "maxPasses": None,
+            "maxTurns": None,
+            "vimMode": False,
+            "voiceMode": False,
+            "voiceKeyterms": [],
+        },
         "worktree": {
             "enabled": False,
             "baseDir": str(Path(home_dir) / "worktrees"),
@@ -336,6 +364,22 @@ def load_config(cwd: str | None = None) -> dict[str, Any]:
             **DEFAULT_KEYBINDINGS,
             **merged["output"].get("keybindings", {}),
         },
+    }
+    runtime = merged.get("runtime", {})
+    fast_mode = _parse_bool_env("ONECLAW_FAST")
+    vim_mode = _parse_bool_env("ONECLAW_VIM")
+    voice_mode = _parse_bool_env("ONECLAW_VOICE")
+    max_passes = _parse_number_env("ONECLAW_MAX_PASSES")
+    max_turns = _parse_number_env("ONECLAW_MAX_TURNS")
+    merged["runtime"] = {
+        **runtime,
+        "fastMode": fast_mode if fast_mode is not None else bool(runtime.get("fastMode", False)),
+        "effort": _parse_effort_env("ONECLAW_EFFORT") or runtime.get("effort", "medium"),
+        "maxPasses": int(max_passes) if max_passes is not None else runtime.get("maxPasses"),
+        "maxTurns": int(max_turns) if max_turns is not None else runtime.get("maxTurns"),
+        "vimMode": vim_mode if vim_mode is not None else bool(runtime.get("vimMode", False)),
+        "voiceMode": voice_mode if voice_mode is not None else bool(runtime.get("voiceMode", False)),
+        "voiceKeyterms": runtime.get("voiceKeyterms") if isinstance(runtime.get("voiceKeyterms"), list) else [],
     }
     if os.environ.get("ONECLAW_ENABLE_WORKTREES") == "1":
         merged["worktree"]["enabled"] = True

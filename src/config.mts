@@ -4,6 +4,7 @@ import type {
   OneClawConfig,
   ProviderKind,
   ProviderProfile,
+  RuntimeEffort,
 } from "./types.mts"
 import {
   BUILTIN_PROVIDER_PROFILES,
@@ -46,6 +47,27 @@ function parseNumberEnv(name: string): number | undefined {
   }
   const parsed = Number(raw)
   return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function parseBooleanEnv(name: string): boolean | undefined {
+  const raw = process.env[name]
+  if (!raw) {
+    return undefined
+  }
+  if (["1", "true", "yes", "on"].includes(raw.toLowerCase())) {
+    return true
+  }
+  if (["0", "false", "no", "off"].includes(raw.toLowerCase())) {
+    return false
+  }
+  return undefined
+}
+
+function parseRuntimeEffort(raw: string | undefined): RuntimeEffort | undefined {
+  if (raw === "low" || raw === "medium" || raw === "high" || raw === "xhigh") {
+    return raw
+  }
+  return undefined
 }
 
 function parseBridgeAuthTokensEnv(): BridgeAuthTokenConfig[] | undefined {
@@ -150,6 +172,13 @@ export async function loadConfig(cwd = process.cwd()): Promise<OneClawConfig> {
       theme: "neutral",
       keybindings: { ...DEFAULT_KEYBINDINGS },
     },
+    runtime: {
+      fastMode: false,
+      effort: "medium",
+      vimMode: false,
+      voiceMode: false,
+      voiceKeyterms: [],
+    },
     worktree: {
       enabled: false,
       baseDir: join(homeDir, "worktrees"),
@@ -242,6 +271,19 @@ export async function loadConfig(cwd = process.cwd()): Promise<OneClawConfig> {
       ...DEFAULT_KEYBINDINGS,
       ...merged.output.keybindings,
     },
+  }
+  const runtimeConfig = typeof merged.runtime === "object" && merged.runtime
+    ? merged.runtime
+    : defaults.runtime
+  merged.runtime = {
+    ...runtimeConfig,
+    fastMode: parseBooleanEnv("ONECLAW_FAST") ?? runtimeConfig.fastMode,
+    effort: parseRuntimeEffort(process.env.ONECLAW_EFFORT) ?? runtimeConfig.effort,
+    maxPasses: parseNumberEnv("ONECLAW_MAX_PASSES") ?? runtimeConfig.maxPasses,
+    maxTurns: parseNumberEnv("ONECLAW_MAX_TURNS") ?? runtimeConfig.maxTurns,
+    vimMode: parseBooleanEnv("ONECLAW_VIM") ?? runtimeConfig.vimMode,
+    voiceMode: parseBooleanEnv("ONECLAW_VOICE") ?? runtimeConfig.voiceMode,
+    voiceKeyterms: Array.isArray(runtimeConfig.voiceKeyterms) ? runtimeConfig.voiceKeyterms : [],
   }
   merged.worktree.enabled = process.env.ONECLAW_ENABLE_WORKTREES === "1"
     ? true

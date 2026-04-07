@@ -35,6 +35,38 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertEqual(result["stopReason"], "end_turn")
             self.assertIn("Tool results received", result["text"])
 
+    def test_runtime_preferences_are_exposed_and_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            os.environ["ONECLAW_HOME"] = root
+            os.environ["ONECLAW_PROVIDER"] = "internal-test"
+            Path(root, "oneclaw.config.json").write_text(json.dumps({
+                "runtime": {
+                    "fastMode": True,
+                    "effort": "high",
+                    "maxPasses": 2,
+                    "maxTurns": 1,
+                    "vimMode": True,
+                    "voiceMode": True,
+                    "voiceKeyterms": ["provider", "latency"],
+                },
+            }), "utf-8")
+            kernel = OneClawKernel(root)
+            state = kernel.state()
+            self.assertEqual(state["fastMode"], True)
+            self.assertEqual(state["effort"], "high")
+            self.assertEqual(state["maxPasses"], 2)
+            self.assertEqual(state["maxTurns"], 1)
+            self.assertEqual(state["vimMode"], True)
+            self.assertEqual(state["voiceMode"], True)
+            self.assertEqual(state["voiceKeyterms"], ["provider", "latency"])
+            context = kernel.context_info(None)
+            self.assertEqual(context["runtime"]["effort"], "high")
+            session = kernel.create_session(root)
+            kernel.run_prompt("hello", session_id=session["id"])
+            with self.assertRaisesRegex(RuntimeError, "Turn limit reached"):
+                kernel.run_prompt("hello again", session_id=session["id"])
+            kernel.shutdown()
+
     def test_tool_registry_context_and_compact_policy_are_exposed(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             os.environ["ONECLAW_HOME"] = root

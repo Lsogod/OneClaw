@@ -77,6 +77,13 @@ export function createTestConfig(overrides: Partial<OneClawConfig> = {}): OneCla
         exit: "ctrl+c",
       },
     },
+    runtime: {
+      fastMode: false,
+      effort: "medium",
+      vimMode: false,
+      voiceMode: false,
+      voiceKeyterms: [],
+    },
     worktree: {
       enabled: false,
       baseDir: join(root, "worktrees"),

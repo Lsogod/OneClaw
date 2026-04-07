@@ -93,6 +93,24 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
         outputStyle: typeof patch.output === "object" && patch.output && "style" in patch.output
           ? (patch.output as { style?: string }).style
           : "text",
+        fastMode: typeof patch.runtime === "object" && patch.runtime && "fastMode" in patch.runtime
+          ? (patch.runtime as { fastMode?: boolean }).fastMode
+          : false,
+        effort: typeof patch.runtime === "object" && patch.runtime && "effort" in patch.runtime
+          ? (patch.runtime as { effort?: string }).effort
+          : "medium",
+        maxPasses: typeof patch.runtime === "object" && patch.runtime && "maxPasses" in patch.runtime
+          ? (patch.runtime as { maxPasses?: number }).maxPasses
+          : undefined,
+        maxTurns: typeof patch.runtime === "object" && patch.runtime && "maxTurns" in patch.runtime
+          ? (patch.runtime as { maxTurns?: number }).maxTurns
+          : undefined,
+        vimMode: typeof patch.runtime === "object" && patch.runtime && "vimMode" in patch.runtime
+          ? (patch.runtime as { vimMode?: boolean }).vimMode
+          : false,
+        voiceMode: typeof patch.runtime === "object" && patch.runtime && "voiceMode" in patch.runtime
+          ? (patch.runtime as { voiceMode?: boolean }).voiceMode
+          : false,
       },
     }),
     config: async (section?: string) => ({
@@ -105,6 +123,13 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       model: "gpt-5.4",
       theme: "neutral",
       outputStyle: "text",
+      fastMode: false,
+      effort: "medium",
+      maxPasses: undefined,
+      maxTurns: undefined,
+      vimMode: false,
+      voiceMode: false,
+      voiceKeyterms: [],
       keybindings: {
         submit: "enter",
       },
@@ -277,6 +302,13 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/model")
     expect(helpText).toContain("/theme")
     expect(helpText).toContain("/output-style")
+    expect(helpText).toContain("/fast")
+    expect(helpText).toContain("/effort")
+    expect(helpText).toContain("/passes")
+    expect(helpText).toContain("/turns")
+    expect(helpText).toContain("/continue")
+    expect(helpText).toContain("/vim")
+    expect(helpText).toContain("/voice")
     expect(helpText).toContain("/config")
     expect(helpText).toContain("/doctor")
     expect(helpText).toContain("/bridge")
@@ -362,6 +394,74 @@ describe("Frontend command registry", () => {
         process.env.ONECLAW_HOME = originalHome
       }
     }
+  })
+
+  test("runtime control commands persist hints and continue current session", async () => {
+    const registry = createFrontendCommandRegistry()
+    const patches: Record<string, unknown>[] = []
+    const prompts: string[] = []
+    const context = {
+      client: createFakeClient({
+        state: async () => ({
+          fastMode: false,
+          effort: "medium",
+          maxPasses: undefined,
+          maxTurns: undefined,
+          vimMode: false,
+          voiceMode: false,
+          voiceKeyterms: [],
+        }),
+        updateConfigPatch: async (patch: Record<string, unknown>) => {
+          patches.push(patch)
+          const runtime = typeof patch.runtime === "object" && patch.runtime
+            ? patch.runtime as Record<string, unknown>
+            : {}
+          return {
+            path: "/tmp/oneclaw.config.json",
+            state: runtime,
+          }
+        },
+        runPrompt: async (prompt: string) => {
+          prompts.push(prompt)
+          return {
+            sessionId: "session_current",
+            text: "continued",
+            iterations: 1,
+            stopReason: "end_turn",
+          }
+        },
+      }),
+      sessionId: "session_current",
+      cwd: "/tmp/workspace",
+    } as never
+
+    const commands = [
+      "/fast on",
+      "/effort high",
+      "/passes 3",
+      "/turns 7",
+      "/vim on",
+      "/voice on",
+      "/voice keyterms Review failing provider setup quickly",
+      "/continue finish the pending review",
+    ]
+    const messages: string[] = []
+    for (const command of commands) {
+      const lookup = registry.lookup(command)
+      const result = await lookup?.command.handler(lookup.args, context)
+      messages.push(result?.message ?? "")
+    }
+
+    expect(JSON.stringify(patches)).toContain("\"fastMode\":true")
+    expect(JSON.stringify(patches)).toContain("\"effort\":\"high\"")
+    expect(JSON.stringify(patches)).toContain("\"maxPasses\":3")
+    expect(JSON.stringify(patches)).toContain("\"maxTurns\":7")
+    expect(JSON.stringify(patches)).toContain("\"vimMode\":true")
+    expect(JSON.stringify(patches)).toContain("\"voiceMode\":true")
+    expect(JSON.stringify(patches)).toContain("\"voiceKeyterms\"")
+    expect(messages.join("\n")).toContain("voice keyterm")
+    expect(prompts[0]).toContain("Continue from the current session state")
+    expect(prompts[0]).toContain("finish the pending review")
   })
 
   test("provider command resolves provider kind to profile name", async () => {

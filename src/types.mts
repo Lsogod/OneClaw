@@ -43,6 +43,7 @@ export type PublicProviderKind = Exclude<ProviderKind, "internal-test">
 export type PermissionMode = "allow" | "ask" | "deny"
 export type OutputStyle = "text" | "json"
 export type ThemeName = "neutral" | "contrast"
+export type RuntimeEffort = "low" | "medium" | "high" | "xhigh"
 export type MemoryScope = "session" | "project" | "global"
 export type BridgeAuthScope = "read" | "write" | "control" | "admin"
 export type HookEventName =
@@ -141,6 +142,16 @@ export type OutputConfig = {
   keybindings: Record<string, string>
 }
 
+export type RuntimeConfig = {
+  fastMode: boolean
+  effort: RuntimeEffort
+  maxPasses?: number
+  maxTurns?: number
+  vimMode: boolean
+  voiceMode: boolean
+  voiceKeyterms: string[]
+}
+
 export type WorktreeConfig = {
   enabled: boolean
   baseDir: string
@@ -172,6 +183,7 @@ export type OneClawConfig = {
   sandbox: SandboxConfig
   budget: BudgetConfig
   output: OutputConfig
+  runtime: RuntimeConfig
   worktree: WorktreeConfig
   bridge: {
     host: string

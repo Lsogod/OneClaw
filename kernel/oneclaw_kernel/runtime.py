@@ -1445,6 +1445,7 @@ class OneClawKernel:
     def state(self) -> dict[str, Any]:
         mcp_statuses = self.mcp.list_statuses()
         sandbox_status = get_sandbox_status(self.config)
+        runtime_config = self.config.get("runtime", {})
         return {
             "provider": self.provider.name,
             "activeProfile": self.config["activeProfile"],
@@ -1465,6 +1466,13 @@ class OneClawKernel:
             "eventCount": len(self.event_log),
             "pluginCount": len(self.plugins.plugins),
             "sandbox": sandbox_status,
+            "fastMode": bool(runtime_config.get("fastMode", False)),
+            "effort": runtime_config.get("effort", "medium"),
+            "maxPasses": runtime_config.get("maxPasses"),
+            "maxTurns": runtime_config.get("maxTurns"),
+            "vimMode": bool(runtime_config.get("vimMode", False)),
+            "voiceMode": bool(runtime_config.get("voiceMode", False)),
+            "voiceKeyterms": runtime_config.get("voiceKeyterms") if isinstance(runtime_config.get("voiceKeyterms"), list) else [],
         }
 
     def health(self) -> dict[str, Any]:
@@ -1841,6 +1849,15 @@ class OneClawKernel:
             "activeProfile": self.config["activeProfile"],
             "model": self.config["provider"]["model"],
             "permissionMode": self.config["permissions"]["mode"],
+            "runtime": {
+                "fastMode": bool(self.config.get("runtime", {}).get("fastMode", False)),
+                "effort": self.config.get("runtime", {}).get("effort", "medium"),
+                "maxPasses": self.config.get("runtime", {}).get("maxPasses"),
+                "maxTurns": self.config.get("runtime", {}).get("maxTurns"),
+                "vimMode": bool(self.config.get("runtime", {}).get("vimMode", False)),
+                "voiceMode": bool(self.config.get("runtime", {}).get("voiceMode", False)),
+                "voiceKeyterms": self.config.get("runtime", {}).get("voiceKeyterms", []),
+            },
             "writableRoots": list(self.config["permissions"].get("writableRoots") or []),
             "maxChars": int(self.config["context"]["maxChars"]),
             "keepMessages": int(self.config["context"]["keepMessages"]),
@@ -2015,6 +2032,7 @@ class OneClawKernel:
         return sections
 
     def _build_prompt(self, session: dict[str, Any], prompt: str, skill_names: list[str]) -> str:
+        runtime_config = self.config.get("runtime", {})
         base_sections = [
             self.config["systemPrompt"],
             "\n".join([
@@ -2026,6 +2044,12 @@ class OneClawKernel:
                 f"- model: {self.config['provider']['model']}",
                 f"- output_style: {self.config['output']['style']}",
                 f"- theme: {self.config['output']['theme']}",
+                f"- fast_mode: {bool(runtime_config.get('fastMode', False))}",
+                f"- reasoning_effort: {runtime_config.get('effort', 'medium')}",
+                f"- max_passes: {runtime_config.get('maxPasses') or 'default'}",
+                f"- max_turns: {runtime_config.get('maxTurns') or 'default'}",
+                f"- vim_mode: {bool(runtime_config.get('vimMode', False))}",
+                f"- voice_mode: {bool(runtime_config.get('voiceMode', False))}",
                 f"- date: {now_iso()}",
             ]),
         ]
@@ -2644,6 +2668,31 @@ class OneClawKernel:
         self.estimated_cost_usd += (input_tokens / 1_000_000) * input_price
         self.estimated_cost_usd += (output_tokens / 1_000_000) * output_price
 
+    def _max_query_iterations(self) -> int:
+        configured = self.config.get("runtime", {}).get("maxPasses")
+        try:
+            parsed = int(configured)
+        except (TypeError, ValueError):
+            return 10
+        return max(1, min(parsed, 50))
+
+    def _assert_turn_limit(self, session: dict[str, Any]) -> None:
+        configured = self.config.get("runtime", {}).get("maxTurns")
+        try:
+            max_turns = int(configured)
+        except (TypeError, ValueError):
+            return
+        if max_turns < 1:
+            return
+        user_turns = 0
+        for message in session.get("messages", []):
+            if message.get("role") != "user":
+                continue
+            if any(block.get("type") == "text" for block in message.get("content", [])):
+                user_turns += 1
+        if user_turns >= max_turns:
+            raise RuntimeError(f"Turn limit reached ({max_turns}). Increase `/turns` or clear the session.")
+
     def _compact_if_needed(self, session: dict[str, Any]) -> None:
         total_chars = sum(len(to_plain_text(message["content"])) for message in session["messages"])
         if total_chars <= int(self.config["context"]["maxChars"]):
@@ -2674,6 +2723,7 @@ class OneClawKernel:
             session = self.create_session(cwd, metadata)
         with self._get_session_lock(session["id"]):
             session["cwd"] = self._normalize_and_validate_cwd(session["cwd"])
+            self._assert_turn_limit(session)
             session["messages"].append({
                 "role": "user",
                 "content": [{"type": "text", "text": prompt}],
@@ -2686,7 +2736,8 @@ class OneClawKernel:
             final_text = ""
             final_stop_reason = "end_turn"
             final_usage: dict[str, Any] | None = None
-            while iterations < 10:
+            max_iterations = self._max_query_iterations()
+            while iterations < max_iterations:
                 iterations += 1
                 self._raise_if_cancelled(should_cancel)
                 if on_event:
@@ -2793,7 +2844,7 @@ class OneClawKernel:
                     } for index, tool_call in enumerate(tool_calls)],
                     "createdAt": now_iso(),
                 })
-        raise RuntimeError("Query loop exceeded the maximum number of iterations.")
+        raise RuntimeError(f"Query loop exceeded the maximum number of iterations ({self._max_query_iterations()}).")
 
     def shutdown(self) -> None:
         for session in list(self.sessions.values()):
