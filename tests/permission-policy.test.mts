@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { tmpdir } from "node:os"
+import { resolve } from "node:path"
 import { PermissionPolicy } from "../src/runtime/permission-policy.mts"
 
 describe("PermissionPolicy", () => {
@@ -66,7 +66,7 @@ describe("PermissionPolicy", () => {
         readOnly: true,
       },
       {},
-      tmpdir(),
+      resolve(process.cwd(), "..", `oneclaw-outside-${Date.now()}`),
     )
 
     expect(decision.allowed).toBe(false)

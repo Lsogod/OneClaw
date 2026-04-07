@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { tmpdir } from "node:os"
+import { resolve } from "node:path"
 import { TaskManager } from "../src/tasks/task-manager.mts"
 import type {
   Logger,
@@ -30,7 +30,7 @@ describe("SessionEngine", () => {
 
     let error: Error | null = null
     try {
-      await engine.createSession(tmpdir())
+      await engine.createSession(resolve(process.cwd(), "..", `oneclaw-outside-${Date.now()}`))
     } catch (caught) {
       error = caught as Error
     }

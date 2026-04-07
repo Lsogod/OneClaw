@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { createInterface } from "node:readline"
-import { dirname, join } from "node:path"
+import { delimiter, dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { SessionRecord, SessionRunResult } from "../types.mts"
 
 type KernelResponse = {
@@ -50,7 +51,7 @@ export class KernelClient {
     pythonCommand = process.env.ONECLAW_PYTHON ?? "python3",
     options: KernelClientOptions = {},
   ) {
-    const frontendDir = dirname(new URL(import.meta.url).pathname)
+    const frontendDir = dirname(fileURLToPath(import.meta.url))
     const kernelRoot = join(frontendDir, "..", "..", "kernel")
     const existingPythonPath = process.env.PYTHONPATH
     this.child = spawn(
@@ -62,7 +63,7 @@ export class KernelClient {
           ...process.env,
           ONECLAW_FRONTEND_CWD: cwd,
           PYTHONPATH: existingPythonPath
-            ? `${kernelRoot}${process.platform === "win32" ? ";" : ":"}${existingPythonPath}`
+            ? `${kernelRoot}${delimiter}${existingPythonPath}`
             : kernelRoot,
         },
         stdio: ["pipe", "pipe", "pipe"],

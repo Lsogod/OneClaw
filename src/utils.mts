@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
-import { basename, dirname, join, relative, resolve } from "node:path"
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import type { ContentBlock, Logger, Message, OneClawConfig } from "./types.mts"
 
 function writeStderr(message: string): void {
@@ -131,7 +131,7 @@ export async function walkFiles(
       continue
     }
     const fullPath = join(root, entry.name)
-    const displayPath = prefix ? join(prefix, entry.name) : entry.name
+    const displayPath = prefix ? `${prefix}/${entry.name}` : entry.name
     results.push(displayPath)
     if (entry.isDirectory() && depth > 0) {
       const nested = await walkFiles(fullPath, depth - 1, displayPath)
@@ -191,7 +191,7 @@ export function isInsideRoots(targetPath: string, roots: string[]): boolean {
   return roots.some(root => {
     const resolvedRoot = resolve(root)
     const rel = relative(resolvedRoot, resolvedTarget)
-    return rel === "" || (!rel.startsWith("..") && !rel.includes("../"))
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
   })
 }
 

@@ -2,6 +2,7 @@ import { createInterface } from "node:readline/promises"
 import { stdin, stdout } from "node:process"
 import { spawn } from "node:child_process"
 import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import { formatOutput } from "./output/registry.mts"
 import { KernelClient } from "./frontend/kernel-client.mts"
 import { parseFlagValues, promptFromArgs } from "./utils.mts"
@@ -417,7 +418,7 @@ async function runSmoke(argv: string[]): Promise<void> {
 }
 
 async function runInstall(): Promise<void> {
-  const cliDir = dirname(new URL(import.meta.url).pathname)
+  const cliDir = dirname(fileURLToPath(import.meta.url))
   const scriptPath = resolve(cliDir, "..", "scripts", "install.mjs")
   await new Promise<void>((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, [scriptPath], {
