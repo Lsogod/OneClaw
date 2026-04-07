@@ -257,6 +257,15 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       contentType: "text/plain",
       text: `fetched ${url} ${options?.maxChars ?? 8000}`,
     }),
+    webSearch: async (query: string, options?: { maxResults?: number }) => ({
+      query,
+      url: `https://search.example/?q=${encodeURIComponent(query)}`,
+      status: 200,
+      contentType: "text/html",
+      results: [
+        { title: `result for ${query}`, url: "https://example.test/result" },
+      ].slice(0, options?.maxResults ?? 5),
+    }),
     mcp: async () => ({
       statuses: [],
       resources: [],
@@ -336,6 +345,7 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/diff")
     expect(helpText).toContain("/files")
     expect(helpText).toContain("/fetch")
+    expect(helpText).toContain("/search-web")
     expect(helpText).toContain("/todo")
     expect(helpText).toContain("/stats")
     expect(helpText).toContain("/observability")
@@ -1442,9 +1452,10 @@ describe("Frontend command registry", () => {
     expect(result?.message).toContain("src/index.ts")
   })
 
-  test("fetch and todo commands use kernel-backed management RPCs", async () => {
+  test("fetch, web search, and todo commands use kernel-backed management RPCs", async () => {
     const registry = createFrontendCommandRegistry()
     const fetchLookup = registry.lookup("/fetch https://example.test/page 1200")
+    const searchLookup = registry.lookup("/search-web oneclaw harness --limit 1")
     const todoListLookup = registry.lookup("/todo")
     const todoAddLookup = registry.lookup("/todo add write docs")
     const todoDoneLookup = registry.lookup("/todo done todo-1")
@@ -1468,6 +1479,7 @@ describe("Frontend command registry", () => {
     } as never
 
     const fetchResult = await fetchLookup?.command.handler(fetchLookup.args, context)
+    const searchResult = await searchLookup?.command.handler(searchLookup.args, context)
     const listResult = await todoListLookup?.command.handler(todoListLookup.args, context)
     const addResult = await todoAddLookup?.command.handler(todoAddLookup.args, context)
     const doneResult = await todoDoneLookup?.command.handler(todoDoneLookup.args, context)
@@ -1475,6 +1487,8 @@ describe("Frontend command registry", () => {
 
     expect(fetchResult?.message).toContain("https://example.test/page")
     expect(fetchResult?.message).toContain("fetched")
+    expect(searchResult?.message).toContain("oneclaw harness")
+    expect(searchResult?.message).toContain("https://example.test/result")
     expect(listResult?.message).toContain("existing task")
     expect(addResult?.message).toContain("write docs")
     expect(doneResult?.message).toContain("done")

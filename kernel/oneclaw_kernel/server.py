@@ -179,6 +179,12 @@ def main() -> int:
                     int(params.get("maxChars") or 8000),
                     int(params.get("timeoutMs") or 10000),
                 )
+            elif method == "web_search":
+                result = kernel.web_search(
+                    params["query"],
+                    int(params.get("maxResults") or 5),
+                    int(params.get("timeoutMs") or 10000),
+                )
             elif method == "mcp":
                 result = kernel.mcp_info(bool(params.get("verbose")))
             elif method == "mcp_reconnect":

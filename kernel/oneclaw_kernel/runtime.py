@@ -95,6 +95,38 @@ def html_to_text(value: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def normalize_search_url(raw_url: str) -> str:
+    decoded = html.unescape(raw_url)
+    parsed = urllib.parse.urlparse(decoded)
+    query = urllib.parse.parse_qs(parsed.query)
+    if "uddg" in query and query["uddg"]:
+        return query["uddg"][0]
+    if parsed.scheme in {"http", "https"}:
+        return decoded
+    return decoded
+
+
+def extract_search_results(html_text: str, max_results: int) -> list[dict[str, str]]:
+    results: list[dict[str, str]] = []
+    seen: set[str] = set()
+    link_pattern = re.compile(r"(?is)<a\b[^>]*href=['\"]([^'\"]+)['\"][^>]*>(.*?)</a>")
+    for match in link_pattern.finditer(html_text):
+        raw_url = normalize_search_url(match.group(1))
+        if not raw_url.startswith(("http://", "https://")):
+            continue
+        title = html_to_text(match.group(2)).strip()
+        if not title or raw_url in seen:
+            continue
+        seen.add(raw_url)
+        results.append({
+            "title": limit_text(title, 240),
+            "url": raw_url,
+        })
+        if len(results) >= max_results:
+            break
+    return results
+
+
 def display_path(cwd: str, target_path: str) -> str:
     try:
         return os.path.relpath(target_path, cwd) or os.path.basename(target_path)
@@ -2241,6 +2273,20 @@ class OneClawKernel:
                 },
             },
             {
+                "name": "web_search",
+                "description": "Search the web through a configurable HTML search endpoint.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "maxResults": {"type": "number"},
+                        "timeoutMs": {"type": "number"},
+                    },
+                },
+            },
+            {
                 "name": "todo_list",
                 "description": "Read the current session todo list.",
                 "readOnly": True,
@@ -2593,6 +2639,50 @@ class OneClawKernel:
             "text": limit_text(text.strip(), bounded_max),
         }
 
+    def web_search(self, query: str, max_results: int = 5, timeout_ms: int = 10000) -> dict[str, Any]:
+        search_query = query.strip()
+        if not search_query:
+            raise RuntimeError("web_search query is required.")
+        bounded_results = max(1, min(int(max_results or 5), 20))
+        timeout = max(1, min(float(timeout_ms or 10000) / 1000, 30))
+        endpoint = os.environ.get("ONECLAW_WEB_SEARCH_ENDPOINT", "https://duckduckgo.com/html/")
+        if "{query}" in endpoint:
+            url = endpoint.replace("{query}", urllib.parse.quote(search_query))
+        else:
+            separator = "&" if urllib.parse.urlparse(endpoint).query else "?"
+            url = f"{endpoint}{separator}{urllib.parse.urlencode({'q': search_query})}"
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "OneClaw/0.2 web_search",
+                "Accept": "text/html,*/*;q=0.8",
+            },
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status = getattr(response, "status", 200)
+                final_url = response.geturl()
+                content_type = response.headers.get("content-type", "")
+                raw = response.read(500_000)
+        except urllib.error.HTTPError as error:
+            raw = error.read(500_000)
+            status = error.code
+            final_url = error.geturl()
+            content_type = error.headers.get("content-type", "")
+        charset = "utf-8"
+        match = re.search(r"charset=([^;\s]+)", content_type, re.IGNORECASE)
+        if match:
+            charset = match.group(1).strip("\"'")
+        decoded = raw.decode(charset, "replace")
+        return {
+            "query": search_query,
+            "url": final_url,
+            "status": status,
+            "contentType": content_type,
+            "results": extract_search_results(decoded, bounded_results),
+        }
+
     def _assert_budget(self) -> None:
         max_usd = self.config.get("budget", {}).get("maxUsd")
         if max_usd is not None and self.estimated_cost_usd >= float(max_usd):
@@ -2738,6 +2828,22 @@ class OneClawKernel:
                         "",
                         str(fetched["text"]),
                     ]),
+                }
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "web_search":
+            query = input_payload.get("query")
+            if not isinstance(query, str) or not query.strip():
+                return {"ok": False, "output": "Missing required field: query"}
+            try:
+                searched = self.web_search(
+                    query.strip(),
+                    int(input_payload.get("maxResults") or 5),
+                    int(input_payload.get("timeoutMs") or 10000),
+                )
+                return {
+                    "ok": int(searched["status"]) < 400,
+                    "output": json.dumps(searched, indent=2),
                 }
             except Exception as error:
                 return {"ok": False, "output": str(error)}

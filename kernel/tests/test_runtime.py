@@ -102,14 +102,22 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertEqual(kernel.context_info(session["id"])["session"]["id"], session["id"])
             kernel.shutdown()
 
-    def test_todo_and_web_fetch_runtime_helpers(self) -> None:
+    def test_todo_web_fetch_and_web_search_runtime_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             os.environ["ONECLAW_HOME"] = root
             os.environ["ONECLAW_PROVIDER"] = "internal-test"
+            original_search_endpoint = os.environ.get("ONECLAW_WEB_SEARCH_ENDPOINT")
 
             class Handler(BaseHTTPRequestHandler):
                 def do_GET(self) -> None:
-                    body = b"<html><body><h1>Hello Fetch</h1><p>OneClaw page</p></body></html>"
+                    if self.path.startswith("/search"):
+                        body = (
+                            b"<html><body>"
+                            b"<a class='result__a' href='https://example.test/oneclaw'>OneClaw Harness</a>"
+                            b"</body></html>"
+                        )
+                    else:
+                        body = b"<html><body><h1>Hello Fetch</h1><p>OneClaw page</p></body></html>"
                     self.send_response(200)
                     self.send_header("content-type", "text/html; charset=utf-8")
                     self.send_header("content-length", str(len(body)))
@@ -143,8 +151,22 @@ class KernelRuntimeTests(unittest.TestCase):
                 }, session)
                 self.assertTrue(tool_result["ok"])
                 self.assertIn("OneClaw page", tool_result["output"])
+                os.environ["ONECLAW_WEB_SEARCH_ENDPOINT"] = f"http://127.0.0.1:{server.server_address[1]}/search"
+                searched = kernel.web_search("oneclaw harness", 3)
+                self.assertEqual(searched["status"], 200)
+                self.assertEqual(searched["results"][0]["title"], "OneClaw Harness")
+                search_tool_result = kernel._execute_tool({
+                    "name": "web_search",
+                    "input": {"query": "oneclaw harness", "maxResults": 3},
+                }, session)
+                self.assertTrue(search_tool_result["ok"])
+                self.assertIn("https://example.test/oneclaw", search_tool_result["output"])
                 kernel.shutdown()
             finally:
+                if original_search_endpoint is None:
+                    os.environ.pop("ONECLAW_WEB_SEARCH_ENDPOINT", None)
+                else:
+                    os.environ["ONECLAW_WEB_SEARCH_ENDPOINT"] = original_search_endpoint
                 server.shutdown()
                 server.server_close()
 

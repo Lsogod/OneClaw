@@ -353,6 +353,16 @@ export class KernelClient {
     }>("web_fetch", { url, ...options })
   }
 
+  webSearch(query: string, options: { maxResults?: number; timeoutMs?: number } = {}) {
+    return this.request<{
+      query: string
+      url: string
+      status: number
+      contentType: string
+      results: Array<{ title: string; url: string }>
+    }>("web_search", { query, ...options })
+  }
+
   mcp(options: { verbose?: boolean } = {}) {
     return this.request<Record<string, unknown>>("mcp", options)
   }

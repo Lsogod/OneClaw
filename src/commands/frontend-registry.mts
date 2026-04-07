@@ -2230,6 +2230,31 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   })
 
   registry.register({
+    name: "search-web",
+    description: "Search the web through the kernel web_search tool",
+    handler: async (args, context) => {
+      const parts = words(args)
+      let maxResults = 5
+      const limitIndex = parts.findIndex(part => part === "--limit" || part === "-n")
+      if (limitIndex >= 0) {
+        const parsed = Number.parseInt(parts[limitIndex + 1] ?? "", 10)
+        if (!Number.isFinite(parsed) || parsed < 1 || parsed > 20) {
+          return { message: "Usage: /search-web <query> [--limit 1-20]" }
+        }
+        maxResults = parsed
+        parts.splice(limitIndex, 2)
+      }
+      const query = parts.join(" ").trim()
+      if (!query) {
+        return { message: "Usage: /search-web <query> [--limit 1-20]" }
+      }
+      return {
+        message: pretty(await context.client.webSearch(query, { maxResults })),
+      }
+    },
+  })
+
+  registry.register({
     name: "history",
     description: "Show current session message history",
     handler: async (_args, context) => {

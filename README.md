@@ -401,6 +401,7 @@ bun run sandbox:smoke
 | `/tools` | 查看 tool registry |
 | `/todo` | 管理当前 session 的 todo 状态 |
 | `/fetch` | 通过 kernel `web_fetch` 读取 HTTP(S) URL |
+| `/search-web` | 通过 kernel `web_search` 搜索网页 |
 | `/mcp` | 管理 MCP |
 | `/plugin` / `/skills` / `/hooks` | 管理 plugin、skills 与 lifecycle hooks |
 | `/plan` / `/review` | 运行规划或 review prompt |
