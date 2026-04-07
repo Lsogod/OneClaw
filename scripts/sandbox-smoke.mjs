@@ -56,6 +56,7 @@ process.exit(result.status ?? 0)
     env: {
       ...process.env,
       ONECLAW_HOME: home,
+      ONECLAW_CONFIG: join(home, "oneclaw.config.json"),
       ONECLAW_PROVIDER: "internal-test",
     },
   })
@@ -67,6 +68,8 @@ process.exit(result.status ?? 0)
   const markerText = await readFile(marker, "utf8").catch(() => "")
   if (!markerText.includes("sandbox-wrapper")) {
     process.stderr.write("Sandbox wrapper was not invoked.\n")
+    process.stderr.write(`stdout:\n${result.stdout || "(empty)"}\n`)
+    process.stderr.write(`stderr:\n${result.stderr || "(empty)"}\n`)
     process.exit(1)
   }
   const parsed = JSON.parse(result.stdout)

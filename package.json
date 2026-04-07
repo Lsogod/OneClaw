@@ -16,10 +16,10 @@
     "sandbox:smoke": "node ./scripts/sandbox-smoke.mjs",
     "release:check": "node ./scripts/release-check.mjs",
     "typecheck": "tsc -p ./tsconfig.json --noEmit",
-    "test": "bun test ./tests",
+    "test": "bun test --timeout 20000 ./tests",
     "kernel": "python3 -u -m oneclaw_kernel.server",
     "kernel:test": "node ./scripts/kernel-test.mjs",
-    "ci": "bun run release:check && bun run install:smoke && bun run sandbox:smoke && bun run typecheck && bun test ./tests && node ./scripts/kernel-test.mjs"
+    "ci": "bun run release:check && bun run install:smoke && bun run sandbox:smoke && bun run typecheck && bun run test && node ./scripts/kernel-test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.81.0",

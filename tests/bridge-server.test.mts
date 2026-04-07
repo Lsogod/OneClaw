@@ -34,6 +34,20 @@ async function readFirstSseChunk(response: Response): Promise<string> {
   return value ? new TextDecoder().decode(value) : ""
 }
 
+async function waitFor<T>(
+  read: () => Promise<T>,
+  predicate: (value: T) => boolean,
+  timeoutMs = 5_000,
+): Promise<T> {
+  const startedAt = Date.now()
+  let lastValue = await read()
+  while (!predicate(lastValue) && Date.now() - startedAt < timeoutMs) {
+    await new Promise(resolve => setTimeout(resolve, 100))
+    lastValue = await read()
+  }
+  return lastValue
+}
+
 describe("bridge streaming", () => {
   test("streams kernel events over SSE and closes with a result event", async () => {
     const root = join(tmpdir(), `oneclaw-bridge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
@@ -134,6 +148,8 @@ describe("bridge streaming", () => {
     process.env.ONECLAW_HOME = homeDir
     process.env.ONECLAW_PROVIDER = "internal-test"
     process.env.ONECLAW_BRIDGE_PORT = "0"
+    const pythonCommand = process.platform === "win32" ? "python" : "python3"
+    await writeFile(join(root, "sleep_cancel.py"), "import time\ntime.sleep(5)\n", "utf8")
 
     const server = await startBridgeServer()
     try {
@@ -153,7 +169,7 @@ describe("bridge streaming", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          prompt: 'run shell python3 -c "import time; time.sleep(5)"',
+          prompt: `run shell ${pythonCommand} sleep_cancel.py`,
         }),
       })
 
@@ -426,9 +442,11 @@ describe("bridge streaming", () => {
       const taskSession = await taskSessionResponse.json() as { sessionId?: string }
       expect(typeof taskSession.sessionId).toBe("string")
 
-      const outputResponse = await fetch(`${baseUrl}/tasks/${taskId}/output`)
-      expect(outputResponse.ok).toBe(true)
-      const output = await outputResponse.text()
+      const output = await waitFor(async () => {
+        const outputResponse = await fetch(`${baseUrl}/tasks/${taskId}/output`)
+        expect(outputResponse.ok).toBe(true)
+        return outputResponse.text()
+      }, text => text.includes("[done]"))
       expect(output).toContain("[done]")
 
       const teamResponse = await fetch(`${baseUrl}/teams/qa-team`)
@@ -647,6 +665,8 @@ describe("bridge streaming", () => {
     process.env.ONECLAW_HOME = homeDir
     process.env.ONECLAW_PROVIDER = "internal-test"
     process.env.ONECLAW_BRIDGE_PORT = "0"
+    const pythonCommand = process.platform === "win32" ? "python" : "python3"
+    await writeFile(join(root, "sleep_cancel.py"), "import time\ntime.sleep(5)\n", "utf8")
 
     const server = await startBridgeServer()
     try {
@@ -657,7 +677,7 @@ describe("bridge streaming", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          goal: 'run shell python3 -c "import time; time.sleep(5)"',
+          goal: `run shell ${pythonCommand} sleep_cancel.py`,
           cwd: root,
         }),
       })

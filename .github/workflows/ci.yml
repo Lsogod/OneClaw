@@ -70,7 +70,7 @@ jobs:
         run: bun run release:check
 
       - name: Bun tests
-        run: bun test ./tests
+        run: bun run test
 
       - name: Python kernel tests
         run: node ./scripts/kernel-test.mjs
