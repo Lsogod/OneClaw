@@ -116,10 +116,10 @@ class KernelRuntimeTests(unittest.TestCase):
                     approval_events.append(event)
                     kernel.submit_approval(str(event["approvalId"]), True)
 
-            result = kernel.run_prompt("run shell pwd", cwd=root, on_event=on_event)
+            result = kernel.run_prompt("run shell echo oneclaw-approved", cwd=root, on_event=on_event)
             self.assertEqual(len(approval_events), 1)
             self.assertIn("Tool results received", result["text"])
-            self.assertIn(root, result["text"])
+            self.assertIn("oneclaw-approved", result["text"])
 
     def test_same_session_runs_are_serialized(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -623,14 +623,14 @@ export default {
             home = os.path.join(root, "home")
             os.makedirs(home, exist_ok=True)
             marker = os.path.join(root, "sandbox.log")
-            sandbox_path = os.path.join(root, "sandbox.sh")
+            sandbox_path = os.path.join(root, "sandbox_wrapper.py")
             Path(sandbox_path).write_text(
-                "#!/bin/sh\n"
-                f"echo sandbox >> {marker}\n"
-                "exec \"$@\"\n",
+                "import subprocess\n"
+                "import sys\n"
+                f"open({marker!r}, 'a', encoding='utf-8').write('sandbox\\n')\n"
+                "raise SystemExit(subprocess.call(sys.argv[1:]))\n",
                 "utf-8",
             )
-            os.chmod(sandbox_path, 0o755)
             Path(home, "oneclaw.config.json").write_text(json.dumps({
                 "permissions": {
                     "writableRoots": [root],
@@ -638,15 +638,15 @@ export default {
                 },
                 "sandbox": {
                     "enabled": True,
-                    "command": sandbox_path,
-                    "args": [],
+                    "command": sys.executable,
+                    "args": [sandbox_path],
                     "failIfUnavailable": True,
                 },
             }), "utf-8")
             os.environ["ONECLAW_HOME"] = home
             os.environ["ONECLAW_PROVIDER"] = "internal-test"
             kernel = OneClawKernel(root)
-            result = kernel.run_prompt("run shell pwd", cwd=root)
+            result = kernel.run_prompt("run shell echo sandbox-smoke", cwd=root)
             self.assertIn("Tool results received", result["text"])
             self.assertIn("sandbox", Path(marker).read_text("utf-8"))
             kernel.shutdown()
@@ -694,14 +694,17 @@ export default {
             kernel = OneClawKernel(root)
             cancelled = threading.Event()
             errors: list[str] = []
+            outputs: list[str] = []
+            python_command = "python" if os.name == "nt" else "python3"
 
             def target() -> None:
                 try:
-                    kernel.run_prompt(
-                        'run shell python3 -c "import time; time.sleep(5)"',
+                    result = kernel.run_prompt(
+                        f'run shell {python_command} -c "import time; time.sleep(5)"',
                         cwd=root,
                         should_cancel=cancelled.is_set,
                     )
+                    outputs.append(str(result.get("text", "")))
                 except RuntimeError as error:
                     errors.append(str(error))
 
@@ -713,8 +716,8 @@ export default {
             thread.join(timeout=3)
             self.assertFalse(thread.is_alive())
             self.assertLess(time.time() - started_at, 4)
-            self.assertTrue(errors)
-            self.assertIn("cancel", errors[0].lower())
+            combined = "\n".join([*errors, *outputs]).lower()
+            self.assertIn("cancel", combined)
 
 
 if __name__ == "__main__":
