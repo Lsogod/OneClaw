@@ -110,10 +110,15 @@ class KernelRuntimeTests(unittest.TestCase):
                     "mode": "allow",
                     "writableRoots": [root],
                 },
+                "output": {
+                    "style": "review",
+                },
             }), "utf-8")
             kernel = OneClawKernel(root)
             Path(root, "README.md").write_text("hello old\n", "utf-8")
             Path(root, "ONECLAW.md").write_text("Always mention project instructions.\n", "utf-8")
+            Path(root, ".oneclaw", "output_styles").mkdir(parents=True, exist_ok=True)
+            Path(root, ".oneclaw", "output_styles", "review.md").write_text("Findings first.\n", "utf-8")
             Path(root, "app.ts").write_text(
                 "export class OneClawApp {}\nexport function runOneClaw() {}\n",
                 "utf-8",
@@ -194,6 +199,8 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertIn("Always mention project instructions", instructions["files"][0]["content"])
             self.assertIn("Project Instructions", system_prompt)
             self.assertIn("Always mention project instructions", system_prompt)
+            self.assertIn("Output Style: review", system_prompt)
+            self.assertIn("Findings first", system_prompt)
             self.assertGreaterEqual(kernel.tools_info()["count"], 1)
             self.assertEqual(kernel.compact_policy(session["id"])["sessionId"], session["id"])
             context = kernel.context_info(session["id"])

@@ -399,7 +399,7 @@ bun run sandbox:smoke
 | `/sessions` / `/resume` | 管理 session |
 | `/share` / `/tag` / `/copy` | 导出、标记或复制当前会话内容 |
 | `/provider` / `/profile` / `/model` | 管理 provider、命名 profile 与模型 |
-| `/theme` / `/output-style` | 管理 TUI/CLI 输出偏好 |
+| `/theme` / `/output-style` | 管理 TUI/CLI 输出偏好，支持 project/user catalog |
 | `/keybindings` | 查看或持久化快捷键映射 |
 | `/fast` / `/effort` / `/passes` / `/turns` | 管理运行时速度、推理强度和 query loop 上限 |
 | `/vim` / `/voice` | 持久化前端输入模式 hint 和 voice keyterms |
@@ -485,6 +485,7 @@ OneClaw 借鉴了 OpenHarness 中最值得保留的 harness 设计：
 - command registry
 - tools/MCP/plugin/skills/memory 分层
 - `CLAUDE.md` / `AGENTS.md` / `ONECLAW.md` 项目指令发现与 prompt 注入
+- custom themes 与 output styles：`.oneclaw/themes/*.json`、`.oneclaw/output_styles/*.md`、`~/.oneclaw/themes/*.json`、`~/.oneclaw/output_styles/*.md`
 - tool discovery 与本地 cron job registry
 - lightweight LSP/code-intelligence 入口
 - permission、hooks、sandbox、budget 治理
@@ -512,6 +513,7 @@ OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
 - tool search 与本地 cron registry
 - lightweight Python LSP/code-intelligence
 - project instruction discovery：`ONECLAW.md`、`AGENTS.md`、`CLAUDE.md`、`.claude/rules/*.md`
+- theme/output-style catalog loading：project/user/builtin
 - memory/session 管理
 - task/team/swarm 基础生命周期
 - sandbox fallback smoke

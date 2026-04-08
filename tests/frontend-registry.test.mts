@@ -475,10 +475,22 @@ describe("Frontend command registry", () => {
       const releaseNotesLookup = registry.lookup("/release-notes")
       const upgradeLookup = registry.lookup("/upgrade")
       const themeLookup = registry.lookup("/theme list")
+      const themePreviewLookup = registry.lookup("/theme preview aurora")
+      const themeSetLookup = registry.lookup("/theme aurora")
       const outputStyleLookup = registry.lookup("/output-style list")
+      const outputStyleShowLookup = registry.lookup("/output-style show review")
+      const outputStyleSetLookup = registry.lookup("/output-style review")
       const rewindLookup = registry.lookup("/rewind 2")
 
       const initResult = await initLookup?.command.handler(initLookup.args, context)
+      await mkdir(join(workspace, ".oneclaw", "themes"), { recursive: true })
+      await writeFile(join(workspace, ".oneclaw", "themes", "aurora.json"), `${JSON.stringify({
+        name: "aurora",
+        description: "Project aurora theme",
+        colors: { primary: "#8fdfff" },
+      }, null, 2)}\n`)
+      await mkdir(join(workspace, ".oneclaw", "output_styles"), { recursive: true })
+      await writeFile(join(workspace, ".oneclaw", "output_styles", "review.md"), "# Review Style\n\nFindings first.\n")
       const instructionsResult = await instructionsLookup?.command.handler(instructionsLookup.args, context)
       const instructionsShowResult = await instructionsShowLookup?.command.handler(instructionsShowLookup.args, context)
       const instructionsInitResult = await instructionsInitLookup?.command.handler(instructionsInitLookup.args, context)
@@ -491,7 +503,11 @@ describe("Frontend command registry", () => {
       const releaseNotesResult = await releaseNotesLookup?.command.handler(releaseNotesLookup.args, context)
       const upgradeResult = await upgradeLookup?.command.handler(upgradeLookup.args, context)
       const themeResult = await themeLookup?.command.handler(themeLookup.args, context)
+      const themePreviewResult = await themePreviewLookup?.command.handler(themePreviewLookup.args, context)
+      const themeSetResult = await themeSetLookup?.command.handler(themeSetLookup.args, context)
       const outputStyleResult = await outputStyleLookup?.command.handler(outputStyleLookup.args, context)
+      const outputStyleShowResult = await outputStyleShowLookup?.command.handler(outputStyleShowLookup.args, context)
+      const outputStyleSetResult = await outputStyleSetLookup?.command.handler(outputStyleSetLookup.args, context)
       const rewindResult = await rewindLookup?.command.handler(rewindLookup.args, context)
 
       expect(initResult?.message).toContain(".oneclaw")
@@ -511,7 +527,13 @@ describe("Frontend command registry", () => {
       expect(releaseNotesResult?.message).toContain("OneClaw 0.2.0")
       expect(upgradeResult?.message).toContain("git pull --ff-only")
       expect(themeResult?.message).toContain("neutral")
+      expect(themeResult?.message).toContain("aurora")
+      expect(themePreviewResult?.message).toContain("Project aurora theme")
+      expect(themeSetResult?.message).toContain("aurora")
       expect(outputStyleResult?.message).toContain("json")
+      expect(outputStyleResult?.message).toContain("review")
+      expect(outputStyleShowResult?.message).toContain("Findings first")
+      expect(outputStyleSetResult?.message).toContain("review")
       expect(rewindResult?.message).toContain("Rewound 2 messages")
     } finally {
       if (originalHome === undefined) {

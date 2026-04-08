@@ -276,6 +276,10 @@ IGNORED_SYMBOL_DIRS = {".git", ".hg", ".svn", ".venv", "__pycache__", "dist", "n
 PROJECT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "ONECLAW.md")
 PROJECT_INSTRUCTION_RULE_DIRS = (Path(".claude") / "rules", Path(".oneclaw") / "rules")
 PROJECT_INSTRUCTION_INLINE_FILES = (Path(".claude") / "CLAUDE.md", Path(".oneclaw") / "instructions.md")
+BUILTIN_OUTPUT_STYLE_PROMPTS = {
+    "text": "Use concise, readable prose with compact structure.",
+    "json": "When JSON output is requested, emit strict JSON on stdout and keep logs or explanatory text out of the JSON payload.",
+}
 
 
 def discover_project_instruction_files(cwd: str | Path, roots: list[str]) -> list[Path]:
@@ -332,6 +336,34 @@ def load_project_instruction_entries(
             "content": content,
         })
     return entries
+
+
+def load_output_style_prompt(name: str, cwd: str | Path, home_dir: str | Path) -> dict[str, Any]:
+    normalized = (name or "text").strip() or "text"
+    candidates = [
+        (Path(cwd) / ".oneclaw" / "output_styles" / f"{normalized}.md", "project"),
+        (Path(home_dir) / "output_styles" / f"{normalized}.md", "user"),
+    ]
+    for path, source in candidates:
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text("utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if content:
+            return {
+                "name": normalized,
+                "source": source,
+                "path": str(path),
+                "content": content,
+            }
+    return {
+        "name": normalized,
+        "source": "builtin",
+        "path": None,
+        "content": BUILTIN_OUTPUT_STYLE_PROMPTS.get(normalized, ""),
+    }
 
 
 def iter_python_files(root: Path) -> list[Path]:
@@ -2679,6 +2711,22 @@ class OneClawKernel:
             remaining -= len(rendered) + 2
         return limit_text("\n\n".join(sections), max_chars)
 
+    def _build_output_style_section(self, cwd: str, max_chars: int) -> str:
+        style = load_output_style_prompt(
+            str(self.config["output"]["style"]),
+            cwd,
+            self.config["homeDir"],
+        )
+        content = str(style.get("content") or "").strip()
+        if not content:
+            return ""
+        source = str(style.get("source") or "builtin")
+        path = f"\nSource: {style['path']}" if style.get("path") else ""
+        return limit_text(
+            f"## Output Style: {style['name']}\nSource: {source}{path}\n\n{content}",
+            max_chars,
+        )
+
     def _build_prompt(self, session: dict[str, Any], prompt: str, skill_names: list[str]) -> str:
         runtime_config = self.config.get("runtime", {})
         base_sections = [
@@ -2704,6 +2752,10 @@ class OneClawKernel:
         sections = list(base_sections)
         joined_base = "\n\n".join(base_sections)
         remaining_budget = max(256, int(self.config["context"]["maxChars"]) - len(joined_base) - 128)
+        output_style = self._build_output_style_section(session["cwd"], max(96, int(remaining_budget * 0.15)))
+        if output_style:
+            sections.append(output_style)
+            remaining_budget = max(96, remaining_budget - len(output_style) - 2)
         project_instructions = self._build_project_instruction_section(session["cwd"], max(96, int(remaining_budget * 0.35)))
         if project_instructions:
             sections.append(project_instructions)

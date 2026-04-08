@@ -41,8 +41,8 @@ export type ProviderKind =
 export type PublicProviderKind = Exclude<ProviderKind, "internal-test">
 
 export type PermissionMode = "allow" | "ask" | "deny"
-export type OutputStyle = "text" | "json"
-export type ThemeName = "neutral" | "contrast"
+export type OutputStyle = string
+export type ThemeName = string
 export type RuntimeEffort = "low" | "medium" | "high" | "xhigh"
 export type MemoryScope = "session" | "project" | "global"
 export type BridgeAuthScope = "read" | "write" | "control" | "admin"

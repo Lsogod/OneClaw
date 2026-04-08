@@ -1,4 +1,4 @@
-import { mkdir, readdir } from "node:fs/promises"
+import { mkdir, readFile, readdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { basename, join } from "node:path"
@@ -22,8 +22,6 @@ import { appendText, ensureDir, expandHome, readTextIfExists, slugify, writeText
 
 const ONECLAW_NEXT_VERSION = "0.2.0"
 const VALID_PERMISSION_MODES = new Set(["allow", "ask", "deny"])
-const VALID_THEMES = new Set(["neutral", "contrast"])
-const VALID_OUTPUT_STYLES = new Set(["text", "json"])
 const VALID_RUNTIME_EFFORTS = new Set(["low", "medium", "high", "xhigh"])
 const VALID_HOOK_EVENTS = new Set([
   "session_start",
@@ -41,14 +39,46 @@ const VALID_PUBLIC_PROVIDER_KINDS = new Set([
   "codex-subscription",
   "github-copilot",
 ])
-const THEME_CATALOG = {
-  neutral: "Default low-noise terminal theme.",
-  contrast: "Higher contrast theme for dim terminals and projectors.",
-} as const
-const OUTPUT_STYLE_CATALOG = {
-  text: "Human-readable CLI/TUI output.",
-  json: "Machine-readable stdout for automation.",
-} as const
+type CatalogEntry = {
+  name: string
+  description: string
+  source: "builtin" | "project" | "user"
+  path?: string
+  content?: string
+  colors?: unknown
+  layout?: unknown
+}
+
+const THEME_CATALOG: Record<string, CatalogEntry> = {
+  neutral: {
+    name: "neutral",
+    description: "Default low-noise terminal theme.",
+    source: "builtin",
+    colors: { primary: "cyan", foreground: "white", muted: "gray" },
+    layout: { compact: false, showTokens: true },
+  },
+  contrast: {
+    name: "contrast",
+    description: "Higher contrast theme for dim terminals and projectors.",
+    source: "builtin",
+    colors: { primary: "white", foreground: "white", muted: "cyan" },
+    layout: { compact: false, showTokens: true },
+  },
+}
+const OUTPUT_STYLE_CATALOG: Record<string, CatalogEntry> = {
+  text: {
+    name: "text",
+    description: "Human-readable CLI/TUI output.",
+    source: "builtin",
+    content: "Use concise, readable prose with compact structure.",
+  },
+  json: {
+    name: "json",
+    description: "Machine-readable stdout for automation.",
+    source: "builtin",
+    content: "Emit strict JSON when JSON output is requested; keep logs on stderr.",
+  },
+}
 
 export type FrontendCommandResult = {
   message?: string
@@ -116,6 +146,76 @@ function getCommandCoordinator(): Coordinator {
 
 function pretty(value: unknown): string {
   return JSON.stringify(value, null, 2)
+}
+
+async function readThemeCatalogFromDir(directory: string, source: "project" | "user"): Promise<Record<string, CatalogEntry>> {
+  const entries: Record<string, CatalogEntry> = {}
+  if (!existsSync(directory)) {
+    return entries
+  }
+  for (const item of await readdir(directory, { withFileTypes: true })) {
+    if (!item.isFile() || !item.name.endsWith(".json")) {
+      continue
+    }
+    const path = join(directory, item.name)
+    try {
+      const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>
+      const name = typeof raw.name === "string" && raw.name.trim()
+        ? raw.name.trim()
+        : item.name.replace(/\.json$/, "")
+      entries[name] = {
+        name,
+        description: typeof raw.description === "string" ? raw.description : `Custom theme from ${path}`,
+        source,
+        path,
+        colors: raw.colors,
+        layout: raw.layout,
+      }
+    } catch {
+      // Invalid theme files are ignored so a broken theme does not break the CLI.
+    }
+  }
+  return entries
+}
+
+async function loadThemeCatalog(cwd: string): Promise<Record<string, CatalogEntry>> {
+  return {
+    ...THEME_CATALOG,
+    ...await readThemeCatalogFromDir(join(oneclawHome(), "themes"), "user"),
+    ...await readThemeCatalogFromDir(join(cwd, ".oneclaw", "themes"), "project"),
+  }
+}
+
+async function readOutputStyleCatalogFromDir(directory: string, source: "project" | "user"): Promise<Record<string, CatalogEntry>> {
+  const entries: Record<string, CatalogEntry> = {}
+  if (!existsSync(directory)) {
+    return entries
+  }
+  for (const item of await readdir(directory, { withFileTypes: true })) {
+    if (!item.isFile() || !item.name.endsWith(".md")) {
+      continue
+    }
+    const path = join(directory, item.name)
+    const name = item.name.replace(/\.md$/, "")
+    const content = await readFile(path, "utf8")
+    const firstLine = content.split(/\r?\n/).find(line => line.trim()) ?? ""
+    entries[name] = {
+      name,
+      description: firstLine.replace(/^#+\s*/, "") || `Custom output style from ${path}`,
+      source,
+      path,
+      content,
+    }
+  }
+  return entries
+}
+
+async function loadOutputStyleCatalog(cwd: string): Promise<Record<string, CatalogEntry>> {
+  return {
+    ...OUTPUT_STYLE_CATALOG,
+    ...await readOutputStyleCatalogFromDir(join(oneclawHome(), "output_styles"), "user"),
+    ...await readOutputStyleCatalogFromDir(join(cwd, ".oneclaw", "output_styles"), "project"),
+  }
 }
 
 function words(args: string): string[] {
@@ -1568,34 +1668,38 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       const parts = words(args)
       const value = args.trim()
       if (parts[0] === "list") {
-        return { message: pretty(THEME_CATALOG) }
+        return { message: pretty(await loadThemeCatalog(context.cwd)) }
       }
       if (parts[0] === "preview") {
         const themeName = parts[1] ?? "neutral"
-        if (!VALID_THEMES.has(themeName)) {
-          return { message: "Usage: /theme preview <neutral|contrast>" }
+        const catalog = await loadThemeCatalog(context.cwd)
+        const theme = catalog[themeName]
+        if (!theme) {
+          return { message: "Usage: /theme preview <name>" }
         }
         return {
           message: [
             `theme: ${themeName}`,
-            `description: ${THEME_CATALOG[themeName as keyof typeof THEME_CATALOG]}`,
+            `description: ${theme.description}`,
+            `source: ${theme.source}${theme.path ? ` (${theme.path})` : ""}`,
             "",
-            themeName === "contrast"
-              ? "Status: HIGH CONTRAST | Prompt: > | Accent: cyan"
-              : "Status: neutral | Prompt: > | Accent: muted cyan",
+            pretty({ colors: theme.colors ?? {}, layout: theme.layout ?? {} }),
           ].join("\n"),
         }
       }
       if (!value || value === "show" || value === "current") {
         const state = await context.client.state()
         const current = extractString(state, "theme")
+        const catalog = await loadThemeCatalog(context.cwd)
+        const theme = catalog[current]
         return {
-          message: `${current}\n${THEME_CATALOG[current as keyof typeof THEME_CATALOG] ?? ""}`.trim(),
+          message: theme ? pretty(theme) : current,
         }
       }
       const nextTheme = value.startsWith("set ") ? value.slice(4).trim() : value
-      if (!VALID_THEMES.has(nextTheme)) {
-        return { message: "Usage: /theme [current|list|preview <name>] | /theme <neutral|contrast>" }
+      const catalog = await loadThemeCatalog(context.cwd)
+      if (!catalog[nextTheme]) {
+        return { message: "Usage: /theme [current|list|preview <name>] | /theme <name>" }
       }
       const result = await context.client.updateConfigPatch({
         output: { theme: nextTheme },
@@ -1613,26 +1717,31 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       const parts = words(args)
       const value = args.trim()
       if (parts[0] === "list") {
-        return { message: pretty(OUTPUT_STYLE_CATALOG) }
+        return { message: pretty(await loadOutputStyleCatalog(context.cwd)) }
       }
       if (parts[0] === "show" && parts[1]) {
-        if (!VALID_OUTPUT_STYLES.has(parts[1])) {
-          return { message: "Usage: /output-style show <text|json>" }
+        const catalog = await loadOutputStyleCatalog(context.cwd)
+        const style = catalog[parts[1]]
+        if (!style) {
+          return { message: "Usage: /output-style show <style>" }
         }
         return {
-          message: `${parts[1]}\n${OUTPUT_STYLE_CATALOG[parts[1] as keyof typeof OUTPUT_STYLE_CATALOG]}`,
+          message: pretty(style),
         }
       }
       if (!value || value === "show" || value === "current") {
         const state = await context.client.state()
         const current = extractString(state, "outputStyle")
+        const catalog = await loadOutputStyleCatalog(context.cwd)
+        const style = catalog[current]
         return {
-          message: `${current}\n${OUTPUT_STYLE_CATALOG[current as keyof typeof OUTPUT_STYLE_CATALOG] ?? ""}`.trim(),
+          message: style ? pretty(style) : current,
         }
       }
       const nextStyle = value.startsWith("set ") ? value.slice(4).trim() : value
-      if (!VALID_OUTPUT_STYLES.has(nextStyle)) {
-        return { message: "Usage: /output-style [current|list|show <style>] | /output-style <text|json>" }
+      const catalog = await loadOutputStyleCatalog(context.cwd)
+      if (!catalog[nextStyle]) {
+        return { message: "Usage: /output-style [current|list|show <style>] | /output-style <style>" }
       }
       const result = await context.client.updateConfigPatch({
         output: { style: nextStyle },
