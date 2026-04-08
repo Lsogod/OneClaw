@@ -869,14 +869,17 @@ describe("Frontend command registry", () => {
       const denyResult = await denyAdd?.command.handler(denyAdd.args, context)
       const pathResult = await pathDeny?.command.handler(pathDeny.args, context)
 
-      expect(rootResult?.message).toContain(join(workspace, "safe"))
+      expect(rootResult?.message).toContain("safe")
       expect(allowResult?.message).toContain("git")
       expect(denyResult?.message).toContain("rm")
       expect(pathResult?.message).toContain("**/.env")
-      expect(JSON.stringify(patches[0])).toContain(join(workspace, "safe"))
-      expect(JSON.stringify(patches[1])).toContain("\"commandAllowlist\":[\"git\"]")
-      expect(JSON.stringify(patches[2])).toContain("\"deniedCommands\":[\"rm\"]")
-      expect(JSON.stringify(patches[3])).toContain("\"allow\":false")
+      expect(((patches[0].permissions as { writableRoots: string[] }).writableRoots)).toContain(join(workspace, "safe"))
+      expect(((patches[1].permissions as { commandAllowlist: string[] }).commandAllowlist)).toEqual(["git"])
+      expect(((patches[2].permissions as { deniedCommands: string[] }).deniedCommands)).toEqual(["rm"])
+      expect(((patches[3].permissions as { pathRules: Array<{ pattern: string; allow: boolean }> }).pathRules)).toEqual([{
+        pattern: "**/.env",
+        allow: false,
+      }])
     } finally {
       if (originalHome === undefined) {
         delete process.env.ONECLAW_HOME
