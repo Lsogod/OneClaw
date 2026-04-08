@@ -551,6 +551,40 @@ describe("Frontend command registry", () => {
     }
   })
 
+  test("issue and pr comments commands manage project context files", async () => {
+    const workspace = join(tmpdir(), `oneclaw-project-context-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    await mkdir(workspace, { recursive: true })
+    const registry = createFrontendCommandRegistry()
+    const context = {
+      client: createFakeClient(),
+      sessionId: "session_current",
+      cwd: workspace,
+    } as never
+
+    const issueSet = registry.lookup("/issue set Failing CI :: Windows path assertion is unstable.")
+    const issueShow = registry.lookup("/issue show")
+    const prAdd = registry.lookup("/pr_comments add src/app.ts:42 :: Please simplify this branch.")
+    const prShowAlias = registry.lookup("/pr-comments show")
+    const prClear = registry.lookup("/pr_comments clear")
+
+    const issueSetResult = await issueSet?.command.handler(issueSet.args, context)
+    const issueShowResult = await issueShow?.command.handler(issueShow.args, context)
+    const prAddResult = await prAdd?.command.handler(prAdd.args, context)
+    const prShowResult = await prShowAlias?.command.handler(prShowAlias.args, context)
+    const prClearResult = await prClear?.command.handler(prClear.args, context)
+
+    const issuePath = join(workspace, ".oneclaw", "issue.md")
+    const prPath = join(workspace, ".oneclaw", "pr_comments.md")
+    expect(issueSetResult?.message).toContain("issue.md")
+    expect(issueShowResult?.message).toContain("Failing CI")
+    expect(await readFile(issuePath, "utf8")).toContain("Windows path assertion")
+    expect(prAddResult?.message).toContain("pr_comments.md")
+    expect(prShowResult?.message).toContain("src/app.ts:42")
+    expect(prShowResult?.message).toContain("Please simplify")
+    expect(prClearResult?.message).toContain("Cleared PR comments")
+    expect(existsSync(prPath)).toBe(false)
+  })
+
   test("runtime control commands persist hints and continue current session", async () => {
     const registry = createFrontendCommandRegistry()
     const patches: Record<string, unknown>[] = []

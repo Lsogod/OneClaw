@@ -418,6 +418,7 @@ bun run sandbox:smoke
 | `/cost` / `/usage` | 查看 token 和成本 |
 | `/sessions` / `/resume` | 管理 session |
 | `/share` / `/tag` / `/copy` | 导出、标记或复制当前会话内容 |
+| `/issue` / `/pr_comments` | 管理项目 issue 与 PR review comments 上下文 |
 | `/provider` / `/profile` / `/model` | 管理 provider、命名 profile 与模型 |
 | `/theme` / `/output-style` | 管理 TUI/CLI 输出偏好，支持 project/user catalog |
 | `/keybindings` | 查看或持久化快捷键映射 |

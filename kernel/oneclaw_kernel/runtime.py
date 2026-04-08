@@ -275,7 +275,12 @@ SYMBOL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 IGNORED_SYMBOL_DIRS = {".git", ".hg", ".svn", ".venv", "__pycache__", "dist", "node_modules", "release", "target"}
 PROJECT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "ONECLAW.md")
 PROJECT_INSTRUCTION_RULE_DIRS = (Path(".claude") / "rules", Path(".oneclaw") / "rules")
-PROJECT_INSTRUCTION_INLINE_FILES = (Path(".claude") / "CLAUDE.md", Path(".oneclaw") / "instructions.md")
+PROJECT_INSTRUCTION_INLINE_FILES = (
+    Path(".claude") / "CLAUDE.md",
+    Path(".oneclaw") / "instructions.md",
+    Path(".oneclaw") / "issue.md",
+    Path(".oneclaw") / "pr_comments.md",
+)
 BUILTIN_OUTPUT_STYLE_PROMPTS = {
     "text": "Use concise, readable prose with compact structure.",
     "json": "When JSON output is requested, emit strict JSON on stdout and keep logs or explanatory text out of the JSON payload.",

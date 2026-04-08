@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir } from "node:fs/promises"
+import { mkdir, readFile, readdir, rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { basename, join, resolve } from "node:path"
@@ -464,6 +464,14 @@ function runGit(cwd: string, ...args: string[]): GitResult {
 
 function oneclawHome(): string {
   return expandHome(process.env.ONECLAW_HOME ?? "~/.oneclaw")
+}
+
+function projectIssuePath(cwd: string): string {
+  return join(cwd, ".oneclaw", "issue.md")
+}
+
+function projectPrCommentsPath(cwd: string): string {
+  return join(cwd, ".oneclaw", "pr_comments.md")
 }
 
 function timestampForFile(date = new Date()): string {
@@ -1313,6 +1321,88 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         ].join("\n"),
       }
     },
+  })
+
+  registry.register({
+    name: "issue",
+    description: "Show, set, or clear project issue context",
+    handler: async (args, context) => {
+      const path = projectIssuePath(context.cwd)
+      const parts = words(args)
+      const action = parts[0] ?? "show"
+      if (action === "show") {
+        const content = await readTextIfExists(path)
+        return {
+          message: content?.trim() || `No issue context. File path: ${path}`,
+        }
+      }
+      if (action === "set") {
+        const payload = args.replace(/^set\s*/i, "")
+        const [title, ...bodyParts] = payload.split("::")
+        const body = bodyParts.join("::").trim()
+        if (!title.trim() || !body) {
+          return { message: "Usage: /issue set TITLE :: BODY" }
+        }
+        await writeText(path, [`# ${title.trim()}`, "", body, ""].join("\n"))
+        return {
+          message: `Saved issue context to ${path}`,
+        }
+      }
+      if (action === "clear") {
+        if (existsSync(path)) {
+          await rm(path)
+          return { message: "Cleared issue context." }
+        }
+        return { message: "No issue context to clear." }
+      }
+      return { message: "Usage: /issue [show|set TITLE :: BODY|clear]" }
+    },
+  })
+
+  const prCommentsHandler: FrontendCommandHandler = async (args, context) => {
+    const path = projectPrCommentsPath(context.cwd)
+    const parts = words(args)
+    const action = parts[0] ?? "show"
+    if (action === "show") {
+      const content = await readTextIfExists(path)
+      return {
+        message: content?.trim() || `No PR comments context. File path: ${path}`,
+      }
+    }
+    if (action === "add") {
+      const payload = args.replace(/^add\s*/i, "")
+      const [location, ...commentParts] = payload.split("::")
+      const comment = commentParts.join("::").trim()
+      if (!location.trim() || !comment) {
+        return { message: "Usage: /pr_comments add FILE[:LINE] :: COMMENT" }
+      }
+      const existing = await readTextIfExists(path)
+      const prefix = existing?.trim() ? `${existing.trim()}\n` : "# PR Comments\n"
+      await writeText(path, `${prefix}- ${location.trim()}: ${comment}\n`)
+      return {
+        message: `Added PR comment to ${path}`,
+      }
+    }
+    if (action === "clear") {
+      if (existsSync(path)) {
+        await rm(path)
+        return { message: "Cleared PR comments context." }
+      }
+      return { message: "No PR comments context to clear." }
+    }
+    return { message: "Usage: /pr_comments [show|add FILE[:LINE] :: COMMENT|clear]" }
+  }
+
+  registry.register({
+    name: "pr_comments",
+    description: "Show, add, or clear project PR comments context",
+    handler: prCommentsHandler,
+  })
+
+  registry.register({
+    name: "pr-comments",
+    description: "Alias for /pr_comments",
+    handler: prCommentsHandler,
   })
 
   registry.register({
