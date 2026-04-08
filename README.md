@@ -347,6 +347,7 @@ Skills 与 memory 会进入 prompt assembly，并受 context budget 约束。常
 /plugin tools <name>
 /plugin hooks <name>
 /plugin audit <name-or-path>
+/plugin trust [list|add <name-or-path>|remove <name-or-path-or-hash>|check <name-or-path>]
 /plugin reload
 /hooks files
 /hooks add command <event> <name> <command>
@@ -360,7 +361,7 @@ Skills 与 memory 会进入 prompt assembly，并受 context budget 约束。常
 /memory search <query>
 ```
 
-`/plugin audit` 会检查 manifest、声明权限、可执行模块、hooks、skills、manifest hash 和安装来源，用于安装前审计和本地插件治理。
+`/plugin audit` 会检查 manifest、声明权限、可执行模块、hooks、skills、manifest hash 和安装来源。`/plugin trust` 会记录可信 manifest hash 与来源路径，用于安装前审计和本地插件治理。
 
 ---
 

@@ -24,6 +24,8 @@ type PluginInstallRecord = {
 type PluginState = {
   installed?: Record<string, PluginInstallRecord>
   disabledPlugins?: string[]
+  trustedManifestHashes?: string[]
+  trustedSources?: string[]
 }
 
 function userPluginDir(config: OneClawConfig): string {
@@ -38,6 +40,8 @@ async function readPluginState(config: OneClawConfig): Promise<PluginState> {
   return await readJsonIfExists<PluginState>(statePath(config)) ?? {
     installed: {},
     disabledPlugins: [],
+    trustedManifestHashes: [],
+    trustedSources: [],
   }
 }
 
@@ -46,6 +50,8 @@ async function writePluginState(config: OneClawConfig, state: PluginState): Prom
   await writeJson(statePath(config), {
     installed: state.installed ?? {},
     disabledPlugins: [...new Set(state.disabledPlugins ?? [])].sort(),
+    trustedManifestHashes: [...new Set(state.trustedManifestHashes ?? [])].sort(),
+    trustedSources: [...new Set((state.trustedSources ?? []).map(source => resolve(source)))].sort(),
   })
 }
 
@@ -192,6 +198,12 @@ export async function auditPlugin(
     recordedSource?: string
     destination?: string
   }
+  trust: {
+    trusted: boolean
+    byManifestHash: boolean
+    bySource: boolean
+    manifestMatchesInstallRecord: boolean
+  }
 }> {
   const state = await readPluginState(config)
   const installedRecord = state.installed?.[target]
@@ -209,7 +221,15 @@ export async function auditPlugin(
   ]
   const installedName = installedRecord ? target : Object.entries(state.installed ?? {})
     .find(([, record]) => resolve(record.destination) === source)?.[0]
+  const matchedInstallRecord = installedName ? state.installed?.[installedName] : undefined
   const disabledPlugins = new Set(state.disabledPlugins ?? [])
+  const trustedHashes = new Set(state.trustedManifestHashes ?? [])
+  const trustedSources = new Set((state.trustedSources ?? []).map(source => resolve(source)))
+  const byManifestHash = trustedHashes.has(validation.manifestSha256)
+  const bySource = trustedSources.has(resolve(source))
+  if (!byManifestHash && !bySource) {
+    warnings.push("Plugin is not in the trusted source/hash registry.")
+  }
   return {
     source,
     installedName,
@@ -226,6 +246,90 @@ export async function auditPlugin(
       recordedSource: installedRecord?.source,
       destination: installedRecord?.destination,
     },
+    trust: {
+      trusted: byManifestHash || bySource,
+      byManifestHash,
+      bySource,
+      manifestMatchesInstallRecord: matchedInstallRecord?.manifestSha256 === validation.manifestSha256,
+    },
+  }
+}
+
+export async function pluginTrustState(config: OneClawConfig): Promise<{
+  trustedManifestHashes: string[]
+  trustedSources: string[]
+  userPluginDir: string
+}> {
+  const state = await readPluginState(config)
+  return {
+    trustedManifestHashes: [...new Set(state.trustedManifestHashes ?? [])].sort(),
+    trustedSources: [...new Set((state.trustedSources ?? []).map(source => resolve(source)))].sort(),
+    userPluginDir: userPluginDir(config),
+  }
+}
+
+export async function trustPlugin(
+  config: OneClawConfig,
+  target: string,
+): Promise<{
+  name: string
+  source: string
+  manifestSha256: string
+  trustedManifestHashes: string[]
+  trustedSources: string[]
+}> {
+  const audit = await auditPlugin(config, target)
+  const state = await readPluginState(config)
+  state.trustedManifestHashes = [...new Set([...(state.trustedManifestHashes ?? []), audit.manifestSha256])].sort()
+  state.trustedSources = [...new Set([...(state.trustedSources ?? []), resolve(audit.source)])].sort()
+  await writePluginState(config, state)
+  return {
+    name: audit.name,
+    source: audit.source,
+    manifestSha256: audit.manifestSha256,
+    trustedManifestHashes: state.trustedManifestHashes,
+    trustedSources: state.trustedSources,
+  }
+}
+
+export async function untrustPlugin(
+  config: OneClawConfig,
+  target: string,
+): Promise<{
+  target: string
+  removedManifestHashes: string[]
+  removedSources: string[]
+  trustedManifestHashes: string[]
+  trustedSources: string[]
+}> {
+  const state = await readPluginState(config)
+  const candidates = new Set([target, resolve(target)])
+  try {
+    const audit = await auditPlugin(config, target)
+    candidates.add(audit.manifestSha256)
+    candidates.add(resolve(audit.source))
+    if (audit.state.recordedSource) {
+      candidates.add(resolve(audit.state.recordedSource))
+    }
+    if (audit.state.destination) {
+      candidates.add(resolve(audit.state.destination))
+    }
+  } catch {
+    // Treat unknown targets as raw hash/source entries.
+  }
+  const previousHashes = new Set(state.trustedManifestHashes ?? [])
+  const previousSources = new Set((state.trustedSources ?? []).map(source => resolve(source)))
+  const nextHashes = [...previousHashes].filter(hash => !candidates.has(hash))
+  const nextSources = [...previousSources].filter(source => !candidates.has(source))
+  state.trustedManifestHashes = nextHashes.sort()
+  state.trustedSources = nextSources.sort()
+  await writePluginState(config, state)
+  return {
+    target,
+    removedManifestHashes: [...previousHashes].filter(hash => !nextHashes.includes(hash)).sort(),
+    removedSources: [...previousSources].filter(source => !nextSources.includes(source)).sort(),
+    trustedManifestHashes: state.trustedManifestHashes,
+    trustedSources: state.trustedSources,
   }
 }
 

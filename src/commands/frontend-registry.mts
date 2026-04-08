@@ -13,8 +13,11 @@ import {
   getUserPluginDir,
   installPluginFromPath,
   pluginLifecycleState,
+  pluginTrustState,
   setPluginEnabled,
+  trustPlugin,
   uninstallPlugin,
+  untrustPlugin,
   updatePlugin,
   validatePluginDirectory,
 } from "../plugins/installer.mts"
@@ -3149,6 +3152,23 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         return {
           message: pretty(await auditPlugin(config, target)),
         }
+      }
+      if (action === "trust") {
+        const subaction = parts[1] ?? "list"
+        if (subaction === "list") {
+          return { message: pretty(await pluginTrustState(config)) }
+        }
+        if ((subaction === "add" || subaction === "remove" || subaction === "check") && parts[2]) {
+          const target = args.replace(new RegExp(`^trust\\s+${subaction}\\s+`), "").trim()
+          if (subaction === "add") {
+            return { message: pretty(await trustPlugin(config, target)) }
+          }
+          if (subaction === "remove") {
+            return { message: pretty(await untrustPlugin(config, target)) }
+          }
+          return { message: pretty(await auditPlugin(config, target)) }
+        }
+        return { message: "Usage: /plugin trust [list|add <name-or-path>|remove <name-or-path-or-hash>|check <name-or-path>]" }
       }
       if (action === "install") {
         const sourcePath = args.replace(/^install\s+/, "").trim()
