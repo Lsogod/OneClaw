@@ -960,6 +960,14 @@ function nextBridgeViewMode(mode: BridgeViewMode): BridgeViewMode {
   }
 }
 
+export function shouldRenderBridgePanel(mode: BridgeViewMode): boolean {
+  return mode !== "overview"
+}
+
+export function shouldRenderMcpPanel(mode: McpViewMode): boolean {
+  return mode !== "overview"
+}
+
 export function extractSseFrames(buffer: string): {
   frames: SseFrame[]
   rest: string
@@ -1158,8 +1166,8 @@ function WelcomeBanner() {
         </Text>
       ))}
       <Text> </Text>
-      <Text dim>{"OneClaw terminal agent · transcript-first UI"}</Text>
-      <Text dim>{"/help commands  |  Ctrl+K palette  |  Ctrl+O sessions  |  Ctrl+T profiles"}</Text>
+      <Text dim>{"OneClaw coding agent harness · transcript-first UI"}</Text>
+      <Text dim>{"Panels stay folded by default: Ctrl+B bridge · Ctrl+M MCP · Ctrl+A artifacts · Ctrl+G observability"}</Text>
     </Box>
   )
 }
@@ -1369,13 +1377,13 @@ function InfoPanel(props: {
   events: UiEvent[]
   bridgeSnapshot: BridgeSnapshot
 }) {
-  const bridgeLines = buildBridgeSummaryLines(props.bridgeSnapshot)
-  const hasExtraInfo = props.inspectorSource.trim().length > 0 || props.events.length > 0 || bridgeLines.length > 0
+  const bridgeLines = props.bridgeSnapshot.reachable ? buildBridgeSummaryLines(props.bridgeSnapshot) : []
+  const lines = buildInfoPanelLines(props.selectedSession, props.inspectorSource)
+  const hasExtraInfo = lines.length > 0 || props.inspectorSource.trim().length > 0 || props.events.length > 0 || bridgeLines.length > 0
   if (!hasExtraInfo) {
     return null
   }
 
-  const lines = buildInfoPanelLines(props.selectedSession, props.inspectorSource)
   const recentEvents = props.events.slice(-3)
 
   return (
@@ -3061,7 +3069,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         />
       ) : null}
 
-      {ready ? (
+      {ready && shouldRenderBridgePanel(bridgeViewMode) ? (
         <BridgePanel
           snapshot={bridgeSnapshot}
           mode={bridgeViewMode}
@@ -3070,7 +3078,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         />
       ) : null}
 
-      {ready ? (
+      {ready && shouldRenderMcpPanel(mcpViewMode) ? (
         <McpPanel
           snapshot={mcpSnapshot}
           mode={mcpViewMode}

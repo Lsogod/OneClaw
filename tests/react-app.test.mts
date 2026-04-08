@@ -16,9 +16,18 @@ import {
   formatArtifactContentForInspector,
   resolveUiPresentation,
   resolveStatusBarStats,
+  shouldRenderBridgePanel,
+  shouldRenderMcpPanel,
 } from "../src/tui/react-app.tsx"
 
 describe("TUI view model", () => {
+  test("keeps bridge and MCP detail panels folded on the default overview", () => {
+    expect(shouldRenderBridgePanel("overview")).toBe(false)
+    expect(shouldRenderBridgePanel("tasks")).toBe(true)
+    expect(shouldRenderMcpPanel("overview")).toBe(false)
+    expect(shouldRenderMcpPanel("tools")).toBe(true)
+  })
+
   test("status bar reads token totals from kernel usage() payload", () => {
     const stats = resolveStatusBarStats({
       provider: "codex-subscription",
