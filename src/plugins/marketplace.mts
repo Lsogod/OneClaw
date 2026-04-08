@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process"
+import { createHmac } from "node:crypto"
 import { mkdir, rm } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import type { OneClawConfig } from "../types.mts"
 import { readJsonIfExists, slugify, writeJson } from "../utils.mts"
-import { auditPlugin, installPluginFromPath, trustPlugin } from "./installer.mts"
+import { auditPlugin, getUserPluginDir, installPluginFromPath, trustPlugin } from "./installer.mts"
 
 export type PluginMarketplaceScope = "project" | "user"
 
@@ -33,6 +35,9 @@ type PluginMarketplaceLockRecord = {
   trusted: boolean
   trustRequired?: boolean
   expectedSha256?: string
+  versionConstraint?: string
+  signature?: string
+  signatureEnv?: string
 }
 
 type PluginMarketplaceLockFile = {
@@ -60,6 +65,73 @@ function isRemoteSource(source: string): boolean {
 
 function cloneSource(source: string): string {
   return source.replace(/^git\+/i, "")
+}
+
+function parseVersion(version?: string): [number, number, number] | null {
+  const match = version?.match(/(\d+)\.(\d+)\.(\d+)/)
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
+}
+
+function compareVersions(left: [number, number, number], right: [number, number, number]): number {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) {
+      return left[index] - right[index]
+    }
+  }
+  return 0
+}
+
+function versionSatisfies(version: string | undefined, constraint: string | undefined): boolean {
+  const normalized = constraint?.trim()
+  if (!normalized || normalized === "*") {
+    return true
+  }
+  const parsed = parseVersion(version)
+  if (!parsed) {
+    return false
+  }
+  if (normalized.startsWith("^")) {
+    const base = parseVersion(normalized.slice(1))
+    return base ? parsed[0] === base[0] && compareVersions(parsed, base) >= 0 : false
+  }
+  if (normalized.startsWith("~")) {
+    const base = parseVersion(normalized.slice(1))
+    return base ? parsed[0] === base[0] && parsed[1] === base[1] && compareVersions(parsed, base) >= 0 : false
+  }
+  const operator = normalized.match(/^(>=|<=|>|<|=)?\s*(.+)$/)
+  const target = parseVersion(operator?.[2])
+  const comparison = target ? compareVersions(parsed, target) : 0
+  const op = operator?.[1] ?? "="
+  return op === ">=" ? comparison >= 0
+    : op === "<=" ? comparison <= 0
+      : op === ">" ? comparison > 0
+        : op === "<" ? comparison < 0
+          : comparison === 0
+}
+
+function verifyMarketplaceSignature(
+  manifestSha256: string,
+  signature?: string,
+  signatureEnv?: string,
+): { ok: boolean; kind?: string; error?: string } {
+  const raw = signature?.trim()
+  if (!raw) {
+    return { ok: true }
+  }
+  if (raw.startsWith("hmac-sha256:")) {
+    if (!signatureEnv) {
+      return { ok: false, kind: "hmac-sha256", error: "signatureEnv is required for hmac-sha256 signatures" }
+    }
+    const secret = process.env[signatureEnv]
+    if (!secret) {
+      return { ok: false, kind: "hmac-sha256", error: `Missing signature env: ${signatureEnv}` }
+    }
+    const expected = raw.replace(/^hmac-sha256:/, "")
+    const actual = createHmac("sha256", secret).update(manifestSha256).digest("hex")
+    return { ok: expected === actual, kind: "hmac-sha256", error: expected === actual ? undefined : "signature mismatch" }
+  }
+  const expected = raw.replace(/^sha256:/, "")
+  return { ok: expected === manifestSha256, kind: "sha256", error: expected === manifestSha256 ? undefined : "signature mismatch" }
 }
 
 function normalizeEntry(entry: PluginMarketplaceEntry, scope: PluginMarketplaceScope, path: string): PluginMarketplaceEntry {
@@ -211,7 +283,15 @@ export async function installPluginFromMarketplace(
   config: OneClawConfig,
   cwd: string,
   name: string,
-  options: { trust?: boolean; dryRun?: boolean; requireTrust?: boolean; expectedSha256?: string } = {},
+  options: {
+    trust?: boolean
+    dryRun?: boolean
+    requireTrust?: boolean
+    expectedSha256?: string
+    versionConstraint?: string
+    signature?: string
+    signatureEnv?: string
+  } = {},
 ): Promise<Record<string, unknown>> {
   const entry = await findPluginMarketplaceEntry(config, cwd, name)
   if (!entry) {
@@ -233,6 +313,8 @@ export async function installPluginFromMarketplace(
         ...(remote ? [`clone ${entry.source} -> ${resolvedSource}`] : []),
         `audit ${resolvedSource}`,
         ...(options.expectedSha256 ? [`verify manifest sha256 ${options.expectedSha256}`] : []),
+        ...(options.versionConstraint ? [`verify version ${options.versionConstraint}`] : []),
+        ...(options.signature ? [`verify signature ${options.signatureEnv ? `${options.signatureEnv}:` : ""}${options.signature}`] : []),
         ...(options.requireTrust ? ["require existing trust"] : []),
         `install ${entry.name}`,
         ...(options.trust ? [`trust ${entry.name}`] : []),
@@ -273,6 +355,29 @@ export async function installPluginFromMarketplace(
       error: `Manifest sha256 mismatch: expected ${options.expectedSha256}, got ${audit.manifestSha256}`,
     }
   }
+  const constraint = options.versionConstraint
+  if (constraint && !versionSatisfies(audit.version, constraint)) {
+    return {
+      installed: false,
+      entry,
+      remote,
+      resolvedSource,
+      audit,
+      error: `Plugin version ${audit.version ?? "(missing)"} does not satisfy ${constraint}`,
+    }
+  }
+  const signature = verifyMarketplaceSignature(audit.manifestSha256, options.signature, options.signatureEnv)
+  if (!signature.ok) {
+    return {
+      installed: false,
+      entry,
+      remote,
+      resolvedSource,
+      audit,
+      signature,
+      error: `Plugin signature verification failed: ${signature.error}`,
+    }
+  }
   if (options.requireTrust && !audit.trust.trusted && !options.trust) {
     return {
       installed: false,
@@ -302,6 +407,9 @@ export async function installPluginFromMarketplace(
       trusted: Boolean(options.trust) || audit.trust.trusted,
       trustRequired: Boolean(options.requireTrust),
       expectedSha256: options.expectedSha256,
+      versionConstraint: constraint,
+      signature: options.signature ? "present" : undefined,
+      signatureEnv: options.signatureEnv,
     },
   }
   await writeJson(lockPath, lock)
@@ -315,5 +423,52 @@ export async function installPluginFromMarketplace(
     lockPath,
     lock: lock.plugins[entry.name],
     result: installed,
+  }
+}
+
+export async function diffPluginFromMarketplace(
+  config: OneClawConfig,
+  cwd: string,
+  name: string,
+): Promise<Record<string, unknown>> {
+  const entry = await findPluginMarketplaceEntry(config, cwd, name)
+  if (!entry) {
+    return {
+      found: false,
+      reason: `Plugin marketplace entry not found: ${name}`,
+    }
+  }
+  const remote = isRemoteSource(entry.source)
+  const resolvedSource = remote ? marketplaceSourceDir(config, entry.name) : resolve(entry.source)
+  const installedRoot = join(getUserPluginDir(config), entry.name)
+  const sourceAvailable = existsSync(resolvedSource)
+  const installed = existsSync(installedRoot)
+  const audit = sourceAvailable
+    ? await auditPlugin(config, resolvedSource).catch(error => ({
+        error: error instanceof Error ? error.message : String(error),
+      }))
+    : null
+  const diff = sourceAvailable && installed
+    ? spawnSync("git", ["diff", "--no-index", "--stat", resolvedSource, installedRoot], {
+        encoding: "utf8",
+      })
+    : null
+  return {
+    found: true,
+    entry,
+    remote,
+    resolvedSource,
+    sourceAvailable,
+    installed,
+    installedRoot,
+    cloneRequired: remote && !sourceAvailable,
+    audit,
+    diffStat: diff
+      ? (diff.stdout || diff.stderr || "").trim() || "(no differences)"
+      : sourceAvailable
+        ? installed
+          ? "(no diff output)"
+          : "Plugin is not installed yet."
+        : "Remote plugin source has not been cloned yet. Run install --dry-run or install to prepare it.",
   }
 }

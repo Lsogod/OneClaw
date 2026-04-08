@@ -13,6 +13,7 @@ import {
   buildMcpPanelLines,
   buildObservabilityPanelLines,
   extractSseFrames,
+  formatArtifactContentForInspector,
   resolveUiPresentation,
   resolveStatusBarStats,
 } from "../src/tui/react-app.tsx"
@@ -235,6 +236,7 @@ describe("TUI view model", () => {
     ])
     expect(buildMcpActionOptions("statuses", { kind: "status", server: "fs", value: "fs", label: "fs" }).map(option => option.value)).toEqual([
       "inspect-mcp",
+      "configure-mcp-auth",
       "reconnect-mcp",
     ])
   })
@@ -272,6 +274,7 @@ describe("TUI view model", () => {
 
     expect(buildArtifactPanelLines(snapshot, "overview").join("\n")).toContain("tool-result:1")
     expect(buildArtifactPanelLines(snapshot, "all")).toEqual([
+      "page 1/1 · 2 match(es)",
       "artifact_abc... · tool-result · web_fetch · 128b",
       "artifact_rev... · swarm-summary · swarm review · 64b",
     ])
@@ -279,6 +282,24 @@ describe("TUI view model", () => {
       { value: "artifact_abcdef123456", label: "artifact_abc... · tool-result · web_fetch · 128b" },
       { value: "artifact_review", label: "artifact_rev... · swarm-summary · swarm review · 64b" },
     ])
+    expect(buildArtifactPanelEntries(snapshot, "review")).toEqual([
+      { value: "artifact_review", label: "artifact_rev... · swarm-summary · swarm review · 64b" },
+    ])
+    expect(buildArtifactPanelLines(snapshot, "all", "review")).toEqual([
+      "page 1/1 · 1 match(es) · search \"review\"",
+      "artifact_rev... · swarm-summary · swarm review · 64b",
+    ])
+    expect(formatArtifactContentForInspector({
+      record: snapshot.artifacts[1],
+      content: "# Review\n\n```diff\n+ok\n```",
+    }).renderMode).toBe("markdown")
+    expect(formatArtifactContentForInspector({
+      record: {
+        ...snapshot.artifacts[0],
+        contentType: "application/octet-stream",
+      },
+      content: "abc\0def",
+    }).renderMode).toBe("binary")
   })
 
   test("observability panel lines expose usage and recent events", () => {

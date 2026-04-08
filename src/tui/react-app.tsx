@@ -147,6 +147,13 @@ type ArtifactPanelEntry = {
   label: string
 }
 
+type ArtifactInspectorView = {
+  artifact: ArtifactRecord
+  renderMode: "json" | "markdown" | "diff" | "text" | "binary"
+  content: string
+  truncated: boolean
+}
+
 type UiPresentation = {
   primaryColor: string
   mutedColor: string
@@ -576,11 +583,28 @@ async function bridgeFetchForUi(
   return options.text ? response.text() : response.json()
 }
 
-export function buildArtifactPanelEntries(snapshot: ArtifactSnapshot): ArtifactPanelEntry[] {
+export function buildArtifactPanelEntries(
+  snapshot: ArtifactSnapshot,
+  query = "",
+  page = 0,
+  pageSize = 12,
+): ArtifactPanelEntry[] {
   if (!snapshot.reachable) {
     return []
   }
-  return snapshot.artifacts.slice(0, 12).map(artifact => ({
+  const normalizedQuery = query.trim().toLowerCase()
+  const filtered = normalizedQuery
+    ? snapshot.artifacts.filter(artifact => [
+        artifact.id,
+        artifact.kind,
+        artifact.name,
+        artifact.source ?? "",
+        artifact.contentType,
+        JSON.stringify(artifact.metadata ?? {}),
+      ].join("\n").toLowerCase().includes(normalizedQuery))
+    : snapshot.artifacts
+  const start = Math.max(0, page) * Math.max(1, pageSize)
+  return filtered.slice(start, start + Math.max(1, pageSize)).map(artifact => ({
     value: artifact.id,
     label: [
       shortId(artifact.id),
@@ -591,7 +615,13 @@ export function buildArtifactPanelEntries(snapshot: ArtifactSnapshot): ArtifactP
   }))
 }
 
-export function buildArtifactPanelLines(snapshot: ArtifactSnapshot, mode: ArtifactViewMode = "overview"): string[] {
+export function buildArtifactPanelLines(
+  snapshot: ArtifactSnapshot,
+  mode: ArtifactViewMode = "overview",
+  query = "",
+  page = 0,
+  pageSize = 12,
+): string[] {
   if (!snapshot.reachable) {
     return [`artifacts offline · ${snapshot.error ?? "unknown error"}`]
   }
@@ -608,7 +638,41 @@ export function buildArtifactPanelLines(snapshot: ArtifactSnapshot, mode: Artifa
       ...snapshot.artifacts.slice(0, 5).map(artifact => `${shortId(artifact.id)} · ${artifact.kind} · ${artifact.source ?? artifact.name}`),
     ]
   }
-  return buildArtifactPanelEntries(snapshot).map(entry => entry.label)
+  const entries = buildArtifactPanelEntries(snapshot, query, page, pageSize)
+  const filteredCount = query.trim()
+    ? buildArtifactPanelEntries(snapshot, query, 0, Number.MAX_SAFE_INTEGER).length
+    : snapshot.artifacts.length
+  return [
+    `page ${page + 1}/${Math.max(1, Math.ceil(filteredCount / Math.max(1, pageSize)))} · ${filteredCount} match(es)${query.trim() ? ` · search "${query.trim()}"` : ""}`,
+    ...entries.map(entry => entry.label),
+  ]
+}
+
+export function formatArtifactContentForInspector(
+  payload: { record: ArtifactRecord; content: string },
+  maxChars = 12_000,
+): ArtifactInspectorView {
+  const record = payload.record
+  const contentType = record.contentType.toLowerCase()
+  const filename = `${record.name}.${record.relativePath}`.toLowerCase()
+  const renderMode = payload.content.includes("\0")
+    ? "binary"
+    : contentType.includes("json") || filename.endsWith(".json")
+      ? "json"
+      : contentType.includes("markdown") || filename.endsWith(".md")
+        ? "markdown"
+        : contentType.includes("diff") || filename.endsWith(".diff") || filename.endsWith(".patch")
+          ? "diff"
+          : "text"
+  const content = renderMode === "binary"
+    ? `[binary artifact omitted: ${record.bytes} bytes]`
+    : payload.content.slice(0, maxChars)
+  return {
+    artifact: record,
+    renderMode,
+    content,
+    truncated: renderMode !== "binary" && payload.content.length > maxChars,
+  }
 }
 
 export function buildObservabilityPanelLines(
@@ -864,6 +928,7 @@ export function buildMcpActionOptions(mode: McpViewMode, selected: McpPanelEntry
   if (selected.kind === "status") {
     return [
       { value: "inspect-mcp", label: "Inspect server" },
+      { value: "configure-mcp-auth", label: "Configure auth" },
       { value: "reconnect-mcp", label: "Reconnect server" },
     ]
   }
@@ -1413,18 +1478,21 @@ function ArtifactPanel(props: {
   snapshot: ArtifactSnapshot
   mode: ArtifactViewMode
   selectionIndex: number
+  query?: string
+  page?: number
+  pageSize?: number
 }) {
-  const lines = buildArtifactPanelLines(props.snapshot, props.mode)
+  const lines = buildArtifactPanelLines(props.snapshot, props.mode, props.query ?? "", props.page ?? 0, props.pageSize ?? 12)
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={1}>
       <Text bold>{props.mode === "overview" ? "Artifacts" : "Artifacts all"}</Text>
-      <Text dim>{"Ctrl+A toggle  [ ] select  Enter read  /artifacts list"}</Text>
+      <Text dim>{"Ctrl+A toggle  [ ] select  < > page  / search  Enter read"}</Text>
       <Text> </Text>
       {lines.map((line, index) => (
         <Text
           key={`artifact-panel-${index}`}
-          color={index === props.selectionIndex && props.mode !== "overview" ? "cyan" : undefined}
-          bold={index === props.selectionIndex && props.mode !== "overview"}
+          color={index === props.selectionIndex + 1 && props.mode !== "overview" ? "cyan" : undefined}
+          bold={index === props.selectionIndex + 1 && props.mode !== "overview"}
           dim={index > 0 && props.mode === "overview"}
           wrap="truncate-end"
         >
@@ -1529,6 +1597,8 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
   const [artifactViewMode, setArtifactViewMode] = useState<ArtifactViewMode>("overview")
   const [artifactSelectionIndex, setArtifactSelectionIndex] = useState(0)
   const [artifactPanelVisible, setArtifactPanelVisible] = useState(false)
+  const [artifactSearch, setArtifactSearch] = useState("")
+  const [artifactPage, setArtifactPage] = useState(0)
   const [observabilityPanelVisible, setObservabilityPanelVisible] = useState(false)
   const approvalResolverRef = useRef<((allowed: boolean) => void) | null>(null)
   const bridgeViewModeRef = useRef<BridgeViewMode>("overview")
@@ -1544,8 +1614,8 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
     [mcpSnapshot, mcpViewMode],
   )
   const artifactEntries = useMemo(
-    () => buildArtifactPanelEntries(artifactSnapshot),
-    [artifactSnapshot],
+    () => buildArtifactPanelEntries(artifactSnapshot, artifactSearch, artifactPage),
+    [artifactSnapshot, artifactSearch, artifactPage],
   )
   const presentation = resolveUiPresentation(runtimeState)
 
@@ -1572,7 +1642,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       const maxIndex = Math.max(0, artifactEntries.length - 1)
       return Math.min(previous, maxIndex)
     })
-  }, [artifactEntries.length, artifactViewMode])
+  }, [artifactEntries.length, artifactViewMode, artifactSearch, artifactPage])
 
   const pushEvent = useEffectEvent((label: string) => {
     const trimmed = label.trim()
@@ -1873,6 +1943,40 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
     })
   })
 
+  const moveArtifactPage = useEffectEvent((delta: 1 | -1) => {
+    if (!artifactPanelVisible || artifactViewMode === "overview") {
+      return
+    }
+    const filteredCount = buildArtifactPanelEntries(artifactSnapshot, artifactSearch, 0, Number.MAX_SAFE_INTEGER).length
+    const maxPage = Math.max(0, Math.ceil(filteredCount / 12) - 1)
+    startTransition(() => {
+      setArtifactPage(previous => {
+        const next = Math.max(0, Math.min(maxPage, previous + delta))
+        setArtifactSelectionIndex(0)
+        setStatusLine(`Artifact page ${next + 1}/${maxPage + 1}`)
+        return next
+      })
+    })
+  })
+
+  const openArtifactSearch = useEffectEvent(() => {
+    openInputModal({
+      title: "Search Artifacts",
+      placeholder: "kind, name, source, id, metadata",
+      submitLabel: "enter search",
+      initialValue: artifactSearch,
+      onSubmit: async value => {
+        const query = value.trim()
+        startTransition(() => {
+          setArtifactSearch(query)
+          setArtifactPage(0)
+          setArtifactSelectionIndex(0)
+          setStatusLine(query ? `Artifact search: ${query}` : "Artifact search cleared")
+        })
+      },
+    })
+  })
+
   const inspectArtifactSelection = useEffectEvent(async () => {
     if (!artifactPanelVisible || artifactEntries.length === 0) {
       return
@@ -1884,10 +1988,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
     const payload = await readArtifactContent(cwd, selected.value)
     startTransition(() => {
       setInspectorText(payload
-        ? JSON.stringify({
-            artifact: payload.record,
-            content: payload.content.slice(0, 12_000),
-          }, null, 2)
+        ? JSON.stringify(formatArtifactContentForInspector(payload), null, 2)
         : `Artifact not found: ${selected.value}`)
       setStatusLine(payload ? `Artifact ${selected.value}` : `Artifact missing ${selected.value}`)
     })
@@ -1950,6 +2051,37 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
               setInspectorText(JSON.stringify(payload, null, 2))
               setMcpSnapshot(mcp as McpSnapshot)
               setStatusLine(`Reconnected MCP ${selected.server}`)
+            })
+            return
+          }
+          if (value === "configure-mcp-auth" && selected.server) {
+            openInputModal({
+              title: `MCP Auth ${selected.server}`,
+              placeholder: "env MCP_TOKEN or bearer <token>",
+              submitLabel: "enter save",
+              initialValue: "env MCP_AUTH_TOKEN",
+              onSubmit: async rawValue => {
+                const [mode, value, ...rest] = rawValue.trim().split(/\s+/)
+                if ((mode !== "env" && mode !== "bearer") || !value) {
+                  setStatusLine("MCP auth needs: env <ENV_KEY> or bearer <token>")
+                  return
+                }
+                const payload = await client.mcpConfigureAuth({
+                  name: selected.server!,
+                  mode,
+                  value,
+                  ...(mode === "env" ? { key: rest[0] || value } : {}),
+                })
+                const mcp = await client.mcp({ verbose: true })
+                startTransition(() => {
+                  setInspectorText(JSON.stringify({
+                    configured: payload,
+                    secretPolicy: mode === "env" ? `Use environment variable ${value}.` : "Bearer token stored through MCP auth config; output is redacted.",
+                  }, null, 2))
+                  setMcpSnapshot(mcp as McpSnapshot)
+                  setStatusLine(`Configured MCP auth for ${selected.server}`)
+                })
+              },
             })
             return
           }
@@ -2802,6 +2934,18 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       }
       return
     }
+    if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && artifactPanelVisible && input === "<") {
+      moveArtifactPage(-1)
+      return
+    }
+    if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && artifactPanelVisible && input === ">") {
+      moveArtifactPage(1)
+      return
+    }
+    if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && artifactPanelVisible && input === "/") {
+      openArtifactSearch()
+      return
+    }
     if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && input === ".") {
       if (mcpViewMode !== "overview") {
         openMcpActionPalette()
@@ -2939,6 +3083,8 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
           snapshot={artifactSnapshot}
           mode={artifactViewMode}
           selectionIndex={artifactSelectionIndex}
+          query={artifactSearch}
+          page={artifactPage}
         />
       ) : null}
 

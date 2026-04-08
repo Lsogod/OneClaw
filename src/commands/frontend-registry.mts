@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { basename, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import {
   createArtifact,
   listArtifacts,
@@ -47,6 +47,7 @@ import {
 } from "../plugins/installer.mts"
 import {
   addPluginMarketplaceEntry,
+  diffPluginFromMarketplace,
   initPluginMarketplace,
   installPluginFromMarketplace,
   listPluginMarketplace,
@@ -1319,6 +1320,129 @@ function swarmDiffSummary(context: FrontendCommandContext, name: string): Record
       status: runGit(path, "status", "--short").output || "(clean)",
       diffStat: runGit(path, "diff", "--stat").output || "(no diff)",
     })),
+  }
+}
+
+function swarmWorktreeFlow(
+  context: FrontendCommandContext,
+  name: string,
+  action: "check" | "merge" | "rebase",
+  options: { apply?: boolean } = {},
+): Record<string, unknown> {
+  const team = commandTeamRegistry.get(name)
+  if (!team) {
+    return { error: `Swarm not found: ${name}` }
+  }
+  const worktrees = Object.entries(team.worktrees)
+  if (worktrees.length === 0) {
+    return {
+      team: name,
+      error: "No swarm worktrees are registered. Use /agents team worktree <team> <agent> <path> first.",
+    }
+  }
+  const baseBranch = runGit(context.cwd, "rev-parse", "--abbrev-ref", "HEAD")
+  const baseStatus = runGit(context.cwd, "status", "--short")
+  const results = worktrees.map(([agent, path]) => {
+    const branch = runGit(path, "rev-parse", "--abbrev-ref", "HEAD")
+    const status = runGit(path, "status", "--short")
+    const diffStat = runGit(path, "diff", "--stat")
+    const conflicts = runGit(path, "diff", "--name-only", "--diff-filter=U")
+    const operation = (() => {
+      if (!options.apply || action === "check") {
+        return { ok: true, output: "dry-run" } satisfies GitResult
+      }
+      if (!baseBranch.ok || !branch.ok) {
+        return {
+          ok: false,
+          output: `Cannot ${action}; missing branch information.`,
+        } satisfies GitResult
+      }
+      return action === "rebase"
+        ? runGit(path, "rebase", baseBranch.output)
+        : runGit(context.cwd, "merge", "--no-ff", branch.output)
+    })()
+    return {
+      agent,
+      path,
+      branch: branch.output,
+      status: status.output || "(clean)",
+      diffStat: diffStat.output || "(no diff)",
+      conflicts: conflicts.output || "(none)",
+      operation: {
+        action,
+        applied: Boolean(options.apply && action !== "check"),
+        ok: operation.ok,
+        output: operation.output || "(no output)",
+      },
+    }
+  })
+  const hasConflicts = results.some(result => result.conflicts !== "(none)" || !result.operation.ok)
+  return {
+    team: name,
+    action,
+    applied: Boolean(options.apply && action !== "check"),
+    base: {
+      cwd: context.cwd,
+      branch: baseBranch.output,
+      clean: baseStatus.ok && !baseStatus.output,
+      status: baseStatus.output || "(clean)",
+    },
+    results,
+    mergeReady: !hasConflicts && results.every(result => result.status === "(clean)" || result.diffStat !== "(no diff)"),
+  }
+}
+
+async function swarmAllocateWorktrees(
+  context: FrontendCommandContext,
+  name: string,
+): Promise<Record<string, unknown>> {
+  const team = commandTeamRegistry.get(name)
+  if (!team) {
+    return { error: `Swarm not found: ${name}` }
+  }
+  const repoRoot = runGit(context.cwd, "rev-parse", "--show-toplevel")
+  if (!repoRoot.ok) {
+    return {
+      team: name,
+      error: `Cannot allocate worktrees outside a git repository: ${repoRoot.output}`,
+    }
+  }
+  const seedAgents = team.agents.length > 0
+    ? team.agents
+    : (team.plan.length > 0 ? team.plan.map((_, index) => `worker-${index + 1}`) : ["worker-1"])
+  const root = join(dirname(repoRoot.output), `${basename(repoRoot.output)}.oneclaw-worktrees`, slugify(name))
+  await ensureDir(root)
+  const results = seedAgents.map((agent, index) => {
+    const safeAgent = slugify(agent)
+    const target = join(root, safeAgent)
+    const branch = `oneclaw/${slugify(name)}/${safeAgent}`
+    if (!team.agents.includes(agent)) {
+      commandTeamRegistry.addAgent(name, agent)
+    }
+    if (!team.roles[agent]) {
+      commandTeamRegistry.setRole(name, agent, team.plan[index] ?? `worker ${index + 1}`)
+    }
+    const existing = existsSync(target)
+    const worktree = existing
+      ? { ok: true, output: "worktree already exists" } satisfies GitResult
+      : runGit(repoRoot.output, "worktree", "add", "-B", branch, target, "HEAD")
+    if (worktree.ok) {
+      commandTeamRegistry.setWorktree(name, agent, target)
+    }
+    return {
+      agent,
+      branch,
+      path: target,
+      existing,
+      ok: worktree.ok,
+      output: worktree.output,
+    }
+  })
+  return {
+    team: name,
+    repoRoot: repoRoot.output,
+    worktrees: commandTeamRegistry.get(name)?.worktrees ?? {},
+    results,
   }
 }
 
@@ -3304,6 +3428,50 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           }),
         }
       }
+      if (action === "allocate-worktrees" && parts[1]) {
+        const allocation = await swarmAllocateWorktrees(context, parts[1])
+        const artifact = await createSwarmTextArtifact(context, parts[1], "swarm-worktree-allocation", pretty(allocation), {
+          kind: "worktree-allocation",
+        })
+        return {
+          message: pretty({
+            allocation,
+            artifact,
+          }),
+        }
+      }
+      if ((action === "worktrees" || action === "worktree") && parts[1]) {
+        const team = commandTeamRegistry.get(parts[1])
+        if (!team) {
+          return { message: pretty({ error: `Swarm not found: ${parts[1]}` }) }
+        }
+        return {
+          message: pretty({
+            team: parts[1],
+            worktrees: team.worktrees,
+          }),
+        }
+      }
+      if (action === "worktree-flow" && parts[1]) {
+        const flowAction = (parts[2] ?? "check") as "check" | "merge" | "rebase"
+        if (!["check", "merge", "rebase"].includes(flowAction)) {
+          return { message: "Usage: /swarm worktree-flow <name> [check|merge|rebase] [--apply]" }
+        }
+        const flow = swarmWorktreeFlow(context, parts[1], flowAction, {
+          apply: parts.includes("--apply"),
+        })
+        const artifact = await createSwarmTextArtifact(context, parts[1], `swarm-worktree-${flowAction}`, pretty(flow), {
+          kind: "worktree-flow",
+          action: flowAction,
+          applied: parts.includes("--apply"),
+        })
+        return {
+          message: pretty({
+            flow,
+            artifact,
+          }),
+        }
+      }
       if (action === "message" && parts[1]) {
         const message = args.split(/\s+/).slice(2).join(" ").trim()
         if (!message) {
@@ -3314,7 +3482,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       return {
-        message: "Usage: /swarm [list|create <name> <goal>|split <name>|plan <name> <task 1 :: task 2>|run <name>|status <name>|advance <name> [note]|artifact <name>|review <name> <status|auto> [note]|merge <name> <status|summary> [note]|diff <name>|message <name> <message>|delete <name>]",
+        message: "Usage: /swarm [list|create <name> <goal>|split <name>|plan <name> <task 1 :: task 2>|run <name>|status <name>|advance <name> [note]|artifact <name>|review <name> <status|auto> [note]|merge <name> <status|summary> [note]|diff <name>|allocate-worktrees <name>|worktrees <name>|worktree-flow <name> [check|merge|rebase] [--apply]|message <name> <message>|delete <name>]",
       }
     },
   })
@@ -4350,19 +4518,27 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
             message: pretty(marketplace.plugins.find(entry => entry.name === parts[2]) ?? null),
           }
         }
+        if (subaction === "diff" && parts[2]) {
+          return {
+            message: pretty(await diffPluginFromMarketplace(config, context.cwd, parts[2])),
+          }
+        }
         if (subaction === "install" && parts[2]) {
           const result = await installPluginFromMarketplace(config, context.cwd, parts[2], {
             trust: parts.includes("--trust"),
             dryRun: parts.includes("--dry-run"),
             requireTrust: parts.includes("--require-trust"),
             expectedSha256: takeFlagValue(parts, ["--sha256", "--require-hash"]) ?? undefined,
+            versionConstraint: takeFlagValue(parts, ["--version", "--constraint"]) ?? undefined,
+            signature: takeFlagValue(parts, ["--signature"]) ?? undefined,
+            signatureEnv: takeFlagValue(parts, ["--signature-env"]) ?? undefined,
           })
           if (result.installed) {
             await context.client.reload()
           }
           return { message: pretty(result) }
         }
-        return { message: "Usage: /plugin marketplace [list [query]|init [project|user]|add <project|user> <name> <path-or-source> [description]|remove <project|user> <name>|show <name>|install <name> [--dry-run|--trust|--require-trust|--sha256 <hash>]]" }
+        return { message: "Usage: /plugin marketplace [list [query]|init [project|user]|add <project|user> <name> <path-or-source> [description]|remove <project|user> <name>|show <name>|diff <name>|install <name> [--dry-run|--trust|--require-trust|--sha256 <hash>|--version <range>|--signature <sig> [--signature-env ENV]]]" }
       }
       if (action === "install") {
         const sourcePath = args.replace(/^install\s+/, "").trim()
