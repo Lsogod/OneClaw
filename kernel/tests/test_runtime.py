@@ -277,6 +277,8 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertEqual(kernel.cron_info()["count"], 1)
             self.assertTrue(kernel.cron_delete("daily-smoke")["deleted"])
             self.assertGreaterEqual(kernel.tools_info()["count"], 44)
+            self.assertGreaterEqual(kernel.tools_info()["byCategory"]["filesystem"], 6)
+            self.assertIn("code-intelligence", kernel.tools_info()["byCategory"])
             self.assertTrue(openharness_aligned_tools.issubset(tool_names))
             self.assertTrue(question_tool["ok"])
             self.assertIn("Ship it?", question_tool["output"])

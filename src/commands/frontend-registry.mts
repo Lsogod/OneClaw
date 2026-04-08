@@ -29,6 +29,7 @@ import {
   renderCommandSnippet,
 } from "./snippets.mts"
 import { Coordinator } from "../coordinator/coordinator.mts"
+import { buildEcosystemManifest } from "../ecosystem/manifest.mts"
 import { loadConfig } from "../config.mts"
 import type { KernelClient } from "../frontend/kernel-client.mts"
 import { MemoryManager } from "../memory/manager.mts"
@@ -1579,6 +1580,10 @@ export class FrontendCommandRegistry {
       .sort((left, right) => left.name.localeCompare(right.name))
       .map(command => `/${command.name.padEnd(12)} ${command.description}`)
       .join("\n")
+  }
+
+  commandNames(): string[] {
+    return [...this.commands.keys()].sort()
   }
 }
 
@@ -4322,6 +4327,22 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       return { message: "Usage: /tools [list|summary|source <builtin|plugin|mcp>|search <query>]" }
+    },
+  })
+
+  registry.register({
+    name: "ecosystem",
+    description: "Show the combined command/tool/plugin/skill/MCP ecosystem manifest",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const verbose = parts.includes("verbose") || parts.includes("--verbose") || parts.includes("-v")
+      const manifest = await buildEcosystemManifest({
+        client: context.client,
+        commandNames: registry.commandNames(),
+        cwd: context.cwd,
+        verbose,
+      })
+      return { message: pretty(manifest) }
     },
   })
 

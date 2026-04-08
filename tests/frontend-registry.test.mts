@@ -892,6 +892,7 @@ describe("Frontend command registry", () => {
     const mcpCapabilities = registry.lookup("/mcp capabilities")
     const mcpBrowse = registry.lookup("/mcp browse fake")
     const mcpReadTemplate = registry.lookup("/mcp read-template fake file://{path} path=README.md")
+    const ecosystem = registry.lookup("/ecosystem verbose")
 
     const context = {
       client: createFakeClient(),
@@ -913,6 +914,7 @@ describe("Frontend command registry", () => {
     const mcpCapabilitiesResult = await mcpCapabilities?.command.handler(mcpCapabilities.args, context)
     const mcpBrowseResult = await mcpBrowse?.command.handler(mcpBrowse.args, context)
     const mcpReadTemplateResult = await mcpReadTemplate?.command.handler(mcpReadTemplate.args, context)
+    const ecosystemResult = await ecosystem?.command.handler(ecosystem.args, context)
 
     expect(toolsResult?.message).toContain("read_file")
     expect(toolSearchResult?.message).toContain("matched read")
@@ -930,6 +932,10 @@ describe("Frontend command registry", () => {
     expect(mcpCapabilitiesResult?.message).toContain("fake")
     expect(mcpBrowseResult?.message).toContain("resourceTemplates")
     expect(mcpReadTemplateResult?.message).toContain("resource content")
+    expect(ecosystemResult?.message).toContain("\"commands\"")
+    expect(ecosystemResult?.message).toContain("\"tools\"")
+    expect(ecosystemResult?.message).toContain("\"plugins\"")
+    expect(ecosystemResult?.message).toContain("\"mcp\"")
   })
 
   test("observability command exposes trace and failure summaries", async () => {

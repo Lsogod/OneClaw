@@ -367,7 +367,7 @@ DELETE /channels/:name
 
 OneClaw 使用项目级 `.oneclaw/artifacts/` 管理本地 artifact。它用于沉淀 tool result、swarm summary、诊断包和导出的文本结果，不依赖 bridge server。
 
-当前 kernel 内置 `44` 个 tools，覆盖文件/搜索/编辑/shell、LSP、MCP auth/resources、skills、config、brief、sleep、worktree、plan mode、cron、todo、task、agent、team 和 remote trigger。Plugin tools 与 MCP tools 会在运行时动态追加。
+当前 kernel 内置 `44` 个 tools，覆盖文件/搜索/编辑/shell、LSP、MCP auth/resources、skills、config、brief、sleep、worktree、plan mode、cron、todo、task、agent、team 和 remote trigger。Tool manifest 已从 kernel runtime 拆到独立 registry，按 source 和 category 暴露；plugin tools 与 MCP tools 会在运行时动态追加。
 
 ```text
 /artifacts list [query]
@@ -539,6 +539,7 @@ bun run sandbox:smoke
 | `/vim` / `/voice` | 持久化前端输入模式 hint 和 voice keyterms |
 | `/continue` | 基于当前 session 继续执行 |
 | `/tools` / `/tool-search` | 查看或搜索 tool registry |
+| `/ecosystem` | 汇总 commands、tools、plugins、skills、MCP、hooks 和 project instructions |
 | `/cron` | 管理本地 cron job registry |
 | `/todo` | 管理当前 session 的 todo 状态，可用 `--artifact` 沉淀结果 |
 | `/symbols` | 通过 kernel `code_symbols` 索引或搜索代码符号，可用 `--artifact` 沉淀结果 |
@@ -578,6 +579,7 @@ OneClaw/
 ├── src/tasks/                      # task runtime
 ├── src/agents/                     # team registry
 ├── tests/                          # Bun tests
+├── kernel/oneclaw_kernel/tools/     # kernel tool registry and manifests
 ├── scripts/                        # install、CI、smoke scripts
 ├── .github/workflows/ci.yml
 ├── package.json
