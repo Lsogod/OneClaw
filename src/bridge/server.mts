@@ -45,6 +45,62 @@ function splitPath(pathname: string): string[] {
   return pathname.split("/").filter(Boolean)
 }
 
+const MAX_REQUEST_BODY_BYTES = 1_048_576 // 1 MB
+
+class RequestBodyTooLargeError extends Error {}
+
+function payloadTooLarge(): Response {
+  return json({ error: "Request body too large" }, 413)
+}
+
+async function readLimitedBodyText(request: Request): Promise<string> {
+  if (!request.body) {
+    return ""
+  }
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+      total += value.byteLength
+      if (total > MAX_REQUEST_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        throw new RequestBodyTooLargeError()
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    merged.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(merged)
+}
+
+async function safeParseBody<T = Record<string, unknown>>(request: Request): Promise<{ ok: true; body: T } | { ok: false; response: Response }> {
+  const contentLength = request.headers.get("content-length")
+  if (contentLength && Number(contentLength) > MAX_REQUEST_BODY_BYTES) {
+    return { ok: false, response: payloadTooLarge() }
+  }
+  try {
+    const text = await readLimitedBodyText(request)
+    return { ok: true, body: (text ? JSON.parse(text) : {}) as T }
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return { ok: false, response: payloadTooLarge() }
+    }
+    return { ok: true, body: {} as T }
+  }
+}
+
 function sse(event: string, data: unknown): Uint8Array {
   return encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
 }
@@ -429,6 +485,16 @@ export async function startBridgeServer() {
       const requireScope = (scope: BridgeAuthScope): Response | null => (
         url.pathname === "/health" ? null : authorizeScope(request, config.bridge, scope)
       )
+
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        const parsed = await safeParseBody(request)
+        if (!parsed.ok) {
+          return parsed.response
+        }
+        Object.defineProperty(request, "json", {
+          value: async () => parsed.body,
+        })
+      }
 
       if (request.method === "GET" && url.pathname === "/health") {
         return json(await client.health())

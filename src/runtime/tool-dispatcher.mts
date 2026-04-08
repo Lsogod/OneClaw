@@ -63,19 +63,27 @@ export class ToolDispatcher {
     const result = await tool.execute(toolCall.input, context)
 
     for (const hook of this.hooks) {
-      await hook.afterTool?.({
-        sessionId: context.sessionId,
-        toolCall,
-        result,
-      })
+      try {
+        await hook.afterTool?.({
+          sessionId: context.sessionId,
+          toolCall,
+          result,
+        })
+      } catch (error) {
+        this.logger.debug?.(`[hook] afterTool error: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
-    await this.hookExecutor.execute("after_tool", {
-      event: "after_tool",
-      sessionId: context.sessionId,
-      toolName: tool.spec.name,
-      ok: result.ok,
-      output: result.output,
-    }, context.cwd)
+    try {
+      await this.hookExecutor.execute("after_tool", {
+        event: "after_tool",
+        sessionId: context.sessionId,
+        toolName: tool.spec.name,
+        ok: result.ok,
+        output: result.output,
+      }, context.cwd)
+    } catch (error) {
+      this.logger.debug?.(`[hook] after_tool executor error: ${error instanceof Error ? error.message : String(error)}`)
+    }
 
     return result
   }

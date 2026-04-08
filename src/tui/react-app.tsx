@@ -452,6 +452,12 @@ export function commandHints(helpText: string, buffer: string): string[] {
     .slice(0, 6)
 }
 
+function dropLastGrapheme(text: string): string {
+  const chars = [...text]
+  chars.pop()
+  return chars.join("")
+}
+
 function commandValueFromHint(hint: string): string {
   return hint.trim().split(/\s+/)[0] ?? hint.trim()
 }
@@ -2825,7 +2831,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       }
       if (key.backspace || key.delete) {
         startTransition(() => {
-          setModalInputValue(previous => previous.slice(0, -1))
+          setModalInputValue(previous => dropLastGrapheme(previous))
         })
         return
       }
@@ -3072,7 +3078,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
     }
     if (key.backspace || key.delete) {
       startTransition(() => {
-        setInputBuffer(previous => previous.slice(0, -1))
+        setInputBuffer(previous => dropLastGrapheme(previous))
         setHistoryIndex(-1)
       })
       return

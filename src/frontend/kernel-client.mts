@@ -36,15 +36,23 @@ type PendingRequest = {
 
 type KernelClientOptions = {
   onStderr?: (chunk: string) => void
+  startupTimeoutMs?: number
+  heartbeatIntervalMs?: number
 }
+
+const DEFAULT_STARTUP_TIMEOUT_MS = 30_000
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000
 
 export class KernelClient {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly pending = new Map<string, PendingRequest>()
   private readonly onStderr: (chunk: string) => void
+  private readonly heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private startupTimer: ReturnType<typeof setTimeout> | null = null
   private requestCounter = 0
   private closed = false
   private closing = false
+  private alive = false
 
   constructor(
     cwd = process.cwd(),
@@ -81,7 +89,13 @@ export class KernelClient {
       if (!line.trim()) {
         return
       }
-      const message = JSON.parse(line) as KernelResponse | KernelEventEnvelope
+      let message: KernelResponse | KernelEventEnvelope
+      try {
+        message = JSON.parse(line) as KernelResponse | KernelEventEnvelope
+      } catch {
+        this.onStderr(`[kernel-client] malformed JSON from kernel: ${line.slice(0, 200)}\n`)
+        return
+      }
       if (message.type === "event") {
         const pending = this.pending.get(message.requestId)
         if (!pending) {
@@ -108,6 +122,8 @@ export class KernelClient {
         return
       }
       this.pending.delete(message.id)
+      this.alive = true
+      this.clearStartupTimer()
       if (message.ok) {
         pending.resolve(message.result)
       } else {
@@ -121,6 +137,10 @@ export class KernelClient {
 
     this.child.on("exit", code => {
       this.closed = true
+      if (this.heartbeatTimer) {
+        clearInterval(this.heartbeatTimer)
+      }
+      this.clearStartupTimer()
       if (this.closing && (code === 0 || code === null)) {
         this.pending.clear()
         return
@@ -130,6 +150,58 @@ export class KernelClient {
         pending.reject(new Error(`Kernel process exited with code ${code ?? "unknown"}`))
       }
     })
+
+    const startupTimeout = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
+    this.startupTimer = setTimeout(() => {
+      this.startupTimer = null
+      if (!this.alive && this.pending.size > 0 && !this.closed && !this.closing) {
+        this.onStderr(`[kernel-client] kernel did not respond within ${startupTimeout}ms, terminating\n`)
+        for (const [id, pending] of this.pending.entries()) {
+          this.pending.delete(id)
+          pending.reject(new Error("Kernel startup timed out"))
+        }
+        this.child.kill("SIGTERM")
+        this.closed = true
+      }
+    }, startupTimeout)
+    if (this.startupTimer.unref) {
+      this.startupTimer.unref()
+    }
+
+    const heartbeatMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS
+    this.heartbeatTimer = setInterval(() => {
+      if (this.closed || this.closing || !this.alive) {
+        return
+      }
+      const pingId = `ping_${++this.requestCounter}`
+      this.child.stdin.write(`${JSON.stringify({ id: pingId, method: "health", params: {} })}\n`)
+      const timeout = setTimeout(() => {
+        if (this.pending.has(pingId)) {
+          this.pending.delete(pingId)
+          this.onStderr("[kernel-client] kernel heartbeat timed out\n")
+        }
+      }, 10_000)
+      this.pending.set(pingId, {
+        resolve: () => {
+          clearTimeout(timeout)
+          this.alive = true
+        },
+        reject: () => {
+          clearTimeout(timeout)
+        },
+      })
+    }, heartbeatMs)
+    if (this.heartbeatTimer.unref) {
+      this.heartbeatTimer.unref()
+    }
+  }
+
+  private clearStartupTimer(): void {
+    if (!this.startupTimer) {
+      return
+    }
+    clearTimeout(this.startupTimer)
+    this.startupTimer = null
   }
 
   private request<T>(
@@ -531,6 +603,10 @@ export class KernelClient {
       return
     }
     this.closing = true
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer)
+    }
+    this.clearStartupTimer()
     try {
       await this.request("shutdown")
     } catch {

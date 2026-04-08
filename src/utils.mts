@@ -54,7 +54,12 @@ export async function readJsonIfExists<T>(pathname: string): Promise<T | null> {
   if (!raw) {
     return null
   }
-  return JSON.parse(raw) as T
+  try {
+    return JSON.parse(raw) as T
+  } catch (error) {
+    process.stderr.write(`[oneclaw] warning: failed to parse ${pathname}: ${error instanceof Error ? error.message : String(error)}\n`)
+    return null
+  }
 }
 
 export async function writeJson(pathname: string, value: unknown): Promise<void> {

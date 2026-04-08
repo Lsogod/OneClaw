@@ -140,6 +140,23 @@ export class TeamRegistry {
     return team
   }
 
+  pruneStaleTaskIds(validTaskIds: Set<string>): number {
+    let pruned = 0
+    for (const team of this.teams.values()) {
+      const before = team.tasks.length
+      team.tasks = team.tasks.filter(id => validTaskIds.has(id))
+      if (team.tasks.length < before) {
+        pruned += before - team.tasks.length
+        team.updatedAt = new Date().toISOString()
+      }
+    }
+    if (pruned > 0) {
+      this.persist()
+      this.emit()
+    }
+    return pruned
+  }
+
   setGoal(name: string, goal: string): TeamRecord {
     const team = this.require(name)
     team.goal = goal

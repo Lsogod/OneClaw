@@ -18,6 +18,28 @@ function asObject(input: unknown): Record<string, unknown> {
   return isRecord(input) ? input : {}
 }
 
+const SENSITIVE_ENV_PATTERNS = [
+  /^ANTHROPIC_API_KEY$/i,
+  /^OPENAI_API_KEY$/i,
+  /^ONECLAW_BRIDGE_AUTH/i,
+  /API_KEY$/i,
+  /API_SECRET$/i,
+  /^SECRET_/i,
+  /TOKEN$/i,
+  /PASSWORD$/i,
+  /CREDENTIAL/i,
+]
+
+function filterSensitiveEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const filtered: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(env)) {
+    if (!SENSITIVE_ENV_PATTERNS.some(pattern => pattern.test(key))) {
+      filtered[key] = value
+    }
+  }
+  return filtered
+}
+
 async function execCommand(
   command: string,
   cwd: string,
@@ -29,7 +51,7 @@ async function execCommand(
     const invocation = buildShellInvocation(config, shell, command)
     const child = spawn(invocation.command, invocation.args, {
       cwd,
-      env: process.env,
+      env: filterSensitiveEnv(process.env),
     })
 
     let stdout = ""

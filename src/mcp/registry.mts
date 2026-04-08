@@ -60,6 +60,20 @@ type McpRegistryOptions = {
   createTransport?: (config: McpServerConfig) => McpClientRecord["transport"]
 }
 
+const MCP_TOOL_TIMEOUT_MS = 60_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout>
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(`MCP tool call timed out after ${ms}ms: ${label}`)), ms)
+    timeout.unref?.()
+  })
+  return Promise.race([
+    promise,
+    timeoutPromise,
+  ]).finally(() => clearTimeout(timeout))
+}
+
 function renderMcpContent(result: Record<string, unknown>): string {
   const content = Array.isArray(result.content) ? result.content : []
   const rendered = content.map(item => {
@@ -130,7 +144,7 @@ export class McpRegistry {
       }
     }
     try {
-      const listedResources = await client.listResources()
+      const listedResources = await withTimeout(client.listResources(), MCP_TOOL_TIMEOUT_MS, "listResources")
       return {
         resources: (listedResources.resources ?? []).map(resource => ({
           server: "",
@@ -205,7 +219,7 @@ export class McpRegistry {
   async toTools(): Promise<ToolImplementation[]> {
     const tools: ToolImplementation[] = []
     for (const [serverName, record] of this.clients.entries()) {
-      const listed = await record.client.listTools()
+      const listed = await withTimeout(record.client.listTools(), MCP_TOOL_TIMEOUT_MS, `${serverName}/listTools`)
       for (const tool of listed.tools ?? []) {
         tools.push({
           spec: {
@@ -216,18 +230,29 @@ export class McpRegistry {
             inputSchema: tool.inputSchema ?? { type: "object", properties: {} },
           },
           execute: async input => {
-            const result = await record.client.callTool({
-              name: tool.name,
-              arguments: (input as Record<string, unknown>) ?? {},
-            })
-            const output = renderMcpContent(result as Record<string, unknown>)
-            return {
-              ok: !Boolean((result as Record<string, unknown>).isError),
-              output,
-              metadata: {
-                server: serverName,
-                structuredContent: (result as Record<string, unknown>).structuredContent,
-              },
+            try {
+              const result = await withTimeout(
+                record.client.callTool({
+                  name: tool.name,
+                  arguments: (input as Record<string, unknown>) ?? {},
+                }),
+                MCP_TOOL_TIMEOUT_MS,
+                `${serverName}/${tool.name}`,
+              )
+              const output = renderMcpContent(result as Record<string, unknown>)
+              return {
+                ok: !Boolean((result as Record<string, unknown>).isError),
+                output,
+                metadata: {
+                  server: serverName,
+                  structuredContent: (result as Record<string, unknown>).structuredContent,
+                },
+              }
+            } catch (error) {
+              return {
+                ok: false,
+                output: `MCP tool error: ${error instanceof Error ? error.message : String(error)}`,
+              }
             }
           },
         })

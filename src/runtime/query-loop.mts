@@ -84,7 +84,8 @@ export class QueryLoop {
     let finalStopReason: SessionRunResult["stopReason"] = "end_turn"
     let finalUsage: SessionRunResult["usage"] = undefined
 
-    while (iterations < 10) {
+    const maxIterations = this.config.runtime.maxPasses ?? 10
+    while (iterations < maxIterations) {
       iterations += 1
       options.emit?.({
         type: "iteration_started",
@@ -131,16 +132,24 @@ export class QueryLoop {
       })
 
       for (const hook of this.hooks) {
-        await hook.afterModelCall?.({
-          sessionId: session.id,
-          output: response,
-        })
+        try {
+          await hook.afterModelCall?.({
+            sessionId: session.id,
+            output: response,
+          })
+        } catch (error) {
+          this.logger.debug?.(`[hook] afterModelCall error: ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
-      await this.hookExecutor.execute("after_model", {
-        event: "after_model",
-        sessionId: session.id,
-        stopReason: response.stopReason,
-      }, session.cwd)
+      try {
+        await this.hookExecutor.execute("after_model", {
+          event: "after_model",
+          sessionId: session.id,
+          stopReason: response.stopReason,
+        }, session.cwd)
+      } catch (error) {
+        this.logger.debug?.(`[hook] after_model executor error: ${error instanceof Error ? error.message : String(error)}`)
+      }
 
       finalStopReason = response.stopReason
       finalUsage = response.usage
@@ -199,13 +208,16 @@ export class QueryLoop {
 
       session.messages.push({
         role: "user",
-        content: toolCalls.map((toolCall, index) => ({
-          type: "tool_result" as const,
-          toolCallId: toolCall.id,
-          name: toolCall.name,
-          result: toolResults[index].output,
-          isError: !toolResults[index].ok,
-        })),
+        content: toolCalls.map((toolCall, index) => {
+          const toolResult = toolResults[index] ?? { ok: false, output: "Tool result missing" }
+          return {
+            type: "tool_result" as const,
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+            result: toolResult.output,
+            isError: !toolResult.ok,
+          }
+        }),
         createdAt: new Date().toISOString(),
       })
     }

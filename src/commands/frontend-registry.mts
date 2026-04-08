@@ -4833,7 +4833,10 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         if (!["completed", "failed", "killed", "all"].includes(scope)) {
           return { message: "Usage: /tasks clear [completed|failed|killed|all]" }
         }
-        const cleared = await getCommandTaskManager().clear(scope)
+        const taskManager = getCommandTaskManager()
+        const cleared = await taskManager.clear(scope)
+        const validIds = new Set(taskManager.list().map(t => t.id))
+        commandTeamRegistry.pruneStaleTaskIds(validIds)
         return {
           message: pretty(cleared),
         }

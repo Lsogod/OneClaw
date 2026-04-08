@@ -100,10 +100,14 @@ export class TaskManager {
       this.controllers.delete(taskId)
       this.outputs.delete(taskId)
       if (record.outputPath) {
-        await rm(record.outputPath, { force: true }).catch(() => undefined)
+        await rm(record.outputPath, { force: true }).catch(error => {
+          process.stderr.write(`[task-manager] warning: failed to remove ${record.outputPath}: ${String(error)}\n`)
+        })
       }
       if (this.storageDir) {
-        await rm(join(this.storageDir, `${taskId}.json`), { force: true }).catch(() => undefined)
+        await rm(join(this.storageDir, `${taskId}.json`), { force: true }).catch(error => {
+          process.stderr.write(`[task-manager] warning: failed to remove task record ${taskId}: ${String(error)}\n`)
+        })
       }
       removed.push(taskId)
     }

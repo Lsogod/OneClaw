@@ -530,4 +530,7 @@ async function main(): Promise<void> {
   await runSinglePrompt(argv)
 }
 
-await main()
+await main().catch(error => {
+  process.stderr.write(`[oneclaw] fatal: ${error instanceof Error ? error.message : String(error)}\n`)
+  process.exitCode = 1
+})

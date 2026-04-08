@@ -74,6 +74,24 @@ class MultiToolProvider implements ProviderAdapter {
   }
 }
 
+class LoopingToolProvider implements ProviderAdapter {
+  name = "looping-tool"
+  calls = 0
+
+  async generateTurn(): Promise<ProviderTurnOutput> {
+    this.calls += 1
+    return {
+      content: [{
+        type: "tool_call",
+        id: `tool_${this.calls}`,
+        name: "echo_tool",
+        input: { value: this.calls },
+      }],
+      stopReason: "tool_use",
+    }
+  }
+}
+
 describe("QueryLoop", () => {
   test("executes tool calls and returns final text", async () => {
     const config = createTestConfig()
@@ -146,5 +164,44 @@ describe("QueryLoop", () => {
 
     expect(result.text).toBe("Both tool calls completed.")
     expect(maxConcurrentExecutions).toBe(1)
+  })
+
+  test("uses maxPasses rather than maxTurns for query-loop iterations", async () => {
+    const config = createTestConfig()
+    config.runtime.maxPasses = 1
+    config.runtime.maxTurns = 5
+    const provider = new LoopingToolProvider()
+    const tool: ToolImplementation = {
+      spec: {
+        name: "echo_tool",
+        description: "Echo",
+        inputSchema: {},
+      },
+      async execute() {
+        return {
+          ok: true,
+          output: "hello",
+        }
+      },
+    }
+
+    const queryLoop = createTestQueryLoop(config, provider, [tool])
+
+    const session: SessionRecord = {
+      id: "session_passes",
+      cwd: process.cwd(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      messages: [],
+    }
+    const memory = new FileMemoryStore(config, session.id)
+    let error: Error | null = null
+    try {
+      await queryLoop.run(session, "do the thing", memory, new TaskManager())
+    } catch (caught) {
+      error = caught as Error
+    }
+    expect(error?.message).toContain("maximum number of iterations")
+    expect(provider.calls).toBe(1)
   })
 })
