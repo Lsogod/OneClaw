@@ -7,6 +7,7 @@ import {
   buildBridgePanelEntries,
   buildBridgeSummaryLines,
   buildBridgePanelLines,
+  commandHints,
   buildInfoPanelLines,
   buildMcpActionOptions,
   buildMcpPanelEntries,
@@ -372,5 +373,11 @@ describe("TUI view model", () => {
         text: "follow-up prompt",
       },
     ])
+  })
+
+  test("command hints stop after slash command arguments begin", () => {
+    const helpText = "/instructions\n/init\n"
+    expect(commandHints(helpText, "/inst")).toEqual(["/instructions"])
+    expect(commandHints(helpText, "/instructions list")).toEqual([])
   })
 })

@@ -437,9 +437,12 @@ function hasRealConversation(
     || pendingUserMessages.some(message => message.trim().length > 0)
 }
 
-function commandHints(helpText: string, buffer: string): string[] {
+export function commandHints(helpText: string, buffer: string): string[] {
   const trimmed = buffer.trim()
   if (!trimmed.startsWith("/")) {
+    return []
+  }
+  if (/\s/.test(trimmed)) {
     return []
   }
   const query = trimmed.toLowerCase()
