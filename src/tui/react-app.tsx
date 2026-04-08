@@ -1602,11 +1602,7 @@ function PromptInputBox(props: {
           <Text color={props.presentation.primaryColor} bold>{"> "}</Text>
         )}
         <Text>{props.inputBuffer}</Text>
-        {!props.running && !props.inputBuffer ? (
-          <Text color={props.presentation.mutedColor}>{"Type a prompt or slash command..."}</Text>
-        ) : null}
       </Box>
-      <Text color={borderColor}>{rule}</Text>
     </Box>
   )
 }
@@ -3171,18 +3167,6 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         artifactSnapshot={artifactSnapshot}
       />
 
-      {!ready ? (
-        <Box>
-          <Text color="yellow">{"Connecting to backend..."}</Text>
-        </Box>
-      ) : modalState ? null : (
-        <PromptInputBox
-          running={running}
-          inputBuffer={inputBuffer}
-          presentation={presentation}
-        />
-      )}
-
       {ready && !modalState && !running ? (
         <Box>
           <Text dim>
@@ -3217,6 +3201,18 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
           </Text>
         </Box>
       ) : null}
+
+      {!ready ? (
+        <Box>
+          <Text color="yellow">{"Connecting to backend..."}</Text>
+        </Box>
+      ) : modalState ? null : (
+        <PromptInputBox
+          running={running}
+          inputBuffer={inputBuffer}
+          presentation={presentation}
+        />
+      )}
     </Box>
   )
 }
