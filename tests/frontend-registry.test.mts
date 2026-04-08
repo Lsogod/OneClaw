@@ -443,6 +443,7 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/plan")
     expect(helpText).toContain("/review")
     expect(helpText).toContain("/agents")
+    expect(helpText).toContain("/swarm")
     expect(helpText).toContain("/init")
     expect(helpText).toContain("/share")
     expect(helpText).toContain("/tag")
@@ -743,8 +744,9 @@ describe("Frontend command registry", () => {
   test("provider setup command returns auth guidance for target providers", async () => {
     const registry = createFrontendCommandRegistry()
     const lookedUp = registry.lookup("/provider setup github-copilot")
+    const planLookup = registry.lookup("/provider setup-plan github-copilot")
 
-    const result = await lookedUp?.command.handler(lookedUp.args, {
+    const context = {
       client: createFakeClient({
         state: async () => ({
           provider: "codex-subscription",
@@ -753,10 +755,15 @@ describe("Frontend command registry", () => {
       }),
       sessionId: "session_current",
       cwd: "/tmp/workspace",
-    } as never)
+    } as never
+
+    const result = await lookedUp?.command.handler(lookedUp.args, context)
+    const planResult = await planLookup?.command.handler(planLookup.args, context)
 
     expect(result?.message).toContain("github-copilot")
     expect(result?.message).toContain("one auth copilot-login")
+    expect(planResult?.message).toContain("Copilot device flow")
+    expect(planResult?.message).toContain("/provider test")
   })
 
   test("tools, tool-search, cron, and mcp commands expose harness platform registries", async () => {
@@ -772,6 +779,7 @@ describe("Frontend command registry", () => {
     const mcpRemove = registry.lookup("/mcp remove fake")
     const mcpAuth = registry.lookup("/mcp auth fake bearer secret-token --key TOKEN")
     const mcpTemplates = registry.lookup("/mcp templates")
+    const mcpCapabilities = registry.lookup("/mcp capabilities")
 
     const context = {
       client: createFakeClient(),
@@ -790,6 +798,7 @@ describe("Frontend command registry", () => {
     const mcpRemoveResult = await mcpRemove?.command.handler(mcpRemove.args, context)
     const mcpAuthResult = await mcpAuth?.command.handler(mcpAuth.args, context)
     const mcpTemplatesResult = await mcpTemplates?.command.handler(mcpTemplates.args, context)
+    const mcpCapabilitiesResult = await mcpCapabilities?.command.handler(mcpCapabilities.args, context)
 
     expect(toolsResult?.message).toContain("read_file")
     expect(toolSearchResult?.message).toContain("matched read")
@@ -803,6 +812,8 @@ describe("Frontend command registry", () => {
     expect(mcpAuthResult?.message).toContain("redacted")
     expect((mcpAuthResult?.message ?? "").includes("secret-token")).toBe(false)
     expect(mcpTemplatesResult?.message).toContain("file://{path}")
+    expect(mcpCapabilitiesResult?.message).toContain("serverCount")
+    expect(mcpCapabilitiesResult?.message).toContain("fake")
   })
 
   test("observability command exposes trace and failure summaries", async () => {
@@ -2180,6 +2191,62 @@ describe("Frontend command registry", () => {
     expect(addResult?.message).toContain("session_agent")
     expect(messageResult?.message).toContain("review the flaky suite")
     expect(listResult?.message).toContain("qa-team")
+  })
+
+  test("swarm command runs plan-driven team lifecycle", async () => {
+    const registry = createFrontendCommandRegistry()
+    const name = `swarm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const created: Array<Record<string, unknown> | undefined> = []
+    const prompts: string[] = []
+    const context = {
+      client: createFakeClient({
+        createSession: async (_cwd: string, metadata?: Record<string, unknown>) => {
+          created.push(metadata)
+          return {
+            id: `session_swarm_${created.length}`,
+            cwd: "/tmp/workspace",
+          }
+        },
+        runPromptTracked: (prompt: string) => {
+          prompts.push(prompt)
+          return {
+            requestId: `req_swarm_${prompts.length}`,
+            promise: Promise.resolve({
+              sessionId: `session_swarm_${prompts.length}`,
+              text: `done: ${prompt}`,
+              iterations: 1,
+              stopReason: "end_turn",
+            }),
+          }
+        },
+      }),
+      sessionId: "session_current",
+      cwd: "/tmp/workspace",
+    } as never
+
+    const createLookup = registry.lookup(`/swarm create ${name} ship the release`)
+    const planLookup = registry.lookup(`/swarm plan ${name} inspect risk :: patch bugs`)
+    const runLookup = registry.lookup(`/swarm run ${name}`)
+    const statusLookup = registry.lookup(`/swarm status ${name}`)
+    const reviewLookup = registry.lookup(`/swarm review ${name} approved ready`)
+    const mergeLookup = registry.lookup(`/swarm merge ${name} ready reviewed`)
+
+    const createResult = await createLookup?.command.handler(createLookup.args, context)
+    const planResult = await planLookup?.command.handler(planLookup.args, context)
+    const runResult = await runLookup?.command.handler(runLookup.args, context)
+    const statusResult = await statusLookup?.command.handler(statusLookup.args, context)
+    const reviewResult = await reviewLookup?.command.handler(reviewLookup.args, context)
+    const mergeResult = await mergeLookup?.command.handler(mergeLookup.args, context)
+
+    expect(createResult?.message).toContain(name)
+    expect(planResult?.message).toContain("inspect risk")
+    expect([...prompts].sort()).toEqual(["inspect risk", "patch bugs"].sort())
+    expect(created.every(item => item?.via === "swarm-run")).toBe(true)
+    expect(created.every(item => item?.team === name)).toBe(true)
+    expect(runResult?.message).toContain("\"status\": \"completed\"")
+    expect(statusResult?.message).toContain("\"tasks\"")
+    expect(reviewResult?.message).toContain("\"approved\"")
+    expect(mergeResult?.message).toContain("\"ready\"")
   })
 
   test("stats command aggregates state, usage, session, skill, and plugin views", async () => {

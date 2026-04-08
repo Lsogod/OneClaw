@@ -840,6 +840,48 @@ async function providerSetupSummary(context: FrontendCommandContext, target?: st
   }
 }
 
+async function providerSetupPlan(context: FrontendCommandContext, target?: string): Promise<Record<string, unknown>> {
+  const summary = await providerSetupSummary(context, target)
+  const provider = extractString(summary, "target", "codex-subscription")
+  const diagnostics = summary.diagnostics && typeof summary.diagnostics === "object"
+    ? summary.diagnostics as Record<string, unknown>
+    : {}
+  const providerSteps: Record<string, string[]> = {
+    "anthropic-compatible": [
+      "Set ONECLAW_API_KEY or ANTHROPIC_API_KEY.",
+      "Set ONECLAW_BASE_URL for Kimi/GLM/MiniMax or another Anthropic-compatible gateway.",
+    ],
+    "openai-compatible": [
+      "Set ONECLAW_API_KEY or OPENAI_API_KEY.",
+      "Set ONECLAW_BASE_URL for OpenRouter, local gateways, or another OpenAI-compatible endpoint.",
+    ],
+    "claude-subscription": [
+      "Sign in with the Claude CLI so ~/.claude/.credentials.json exists.",
+    ],
+    "codex-subscription": [
+      "Sign in with Codex so ~/.codex/auth.json exists.",
+    ],
+    "github-copilot": [
+      "Run one auth copilot-login to complete the Copilot device flow.",
+    ],
+  }
+  return {
+    target: provider,
+    configured: extractBoolean(summary, "configured"),
+    active: summary.active,
+    activeProfile: summary.activeProfile,
+    steps: [
+      ...(providerSteps[provider] ?? []),
+      `Inspect state with /provider doctor ${provider}.`,
+      `Create or update a named profile with /profile save <name> ${provider} <model> ...`,
+      "Switch with /provider use <profile-or-kind>.",
+      "Verify connectivity with /provider test.",
+    ],
+    repair: Array.isArray(diagnostics.repair) ? diagnostics.repair : [],
+    diagnostics,
+  }
+}
+
 async function providerTestSummary(context: FrontendCommandContext, target?: string): Promise<Record<string, unknown>> {
   const diagnostics = await context.client.providerDiagnostics(target)
   if (target && diagnostics.provider && typeof diagnostics.provider === "object") {
@@ -1002,6 +1044,31 @@ async function runCommandPrompt(
   return result.text
 }
 
+function parsePlanItems(input: string): string[] {
+  return input
+    .split("::")
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+async function swarmStatus(name: string): Promise<Record<string, unknown>> {
+  const team = commandTeamRegistry.get(name)
+  if (!team) {
+    return {
+      error: `Swarm not found: ${name}`,
+    }
+  }
+  const taskManager = getCommandTaskManager()
+  const tasks = await Promise.all(team.tasks.map(async taskId => ({
+    record: taskManager.get(taskId) ?? null,
+    output: await taskManager.readOutput(taskId, 2000),
+  })))
+  return {
+    team,
+    tasks,
+  }
+}
+
 async function agentsSummary(context: FrontendCommandContext): Promise<Record<string, unknown>> {
   const [state, worktree, sessions] = await Promise.all([
     context.client.state(),
@@ -1041,14 +1108,17 @@ async function runManagedGoal(
   options: {
     via: string
     isolateWorktree: boolean
+    subtasks?: string[]
+    metadata?: Record<string, string>
   },
 ) {
-  return getCommandCoordinator().run(goal, [], async (subtask, task) => {
+  return getCommandCoordinator().run(goal, options.subtasks ?? [], async (subtask, task) => {
     const metadata = {
       via: options.via,
       goal,
       prompt: subtask,
       isolateWorktree: options.isolateWorktree,
+      ...(options.metadata ?? {}),
     }
     await task.setStatusNote("creating session")
     const session = await context.client.createSession(context.cwd, metadata)
@@ -1503,6 +1573,11 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         const payload = await context.client.providers()
         return { message: pretty(payload) }
       }
+      if (parts[0] === "setup-plan" || parts[0] === "wizard" || parts[0] === "plan") {
+        return {
+          message: pretty(await providerSetupPlan(context, parts[1])),
+        }
+      }
       if (parts[0] === "doctor" || parts[0] === "check" || parts[0] === "setup" || parts[0] === "repair") {
         return {
           message: pretty(await providerSetupSummary(context, parts[1])),
@@ -1514,7 +1589,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       if (parts[0] !== "use" || !parts[1]) {
-        return { message: "Usage: /provider [show|list|doctor|setup|check|repair|test [kind]] | /provider use <profile-or-kind>" }
+        return { message: "Usage: /provider [show|list|doctor|setup|setup-plan|check|repair|test [kind]] | /provider use <profile-or-kind>" }
       }
       const profile = await resolveProfile(context, parts[1])
       if (!profile) {
@@ -2564,6 +2639,142 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           tasks: result.tasks,
           summary: result.summary,
         }),
+      }
+    },
+  })
+
+  registry.register({
+    name: "swarm",
+    description: "Run a lightweight plan → agents → review → merge team lifecycle",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts[0] ?? "list"
+      if (action === "list") {
+        return {
+          message: pretty(commandTeamRegistry.list()),
+        }
+      }
+      if (action === "create" && parts[1]) {
+        const name = parts[1]
+        const goal = args.replace(/^create\s+\S+\s*/, "").trim()
+        if (!goal) {
+          return { message: "Usage: /swarm create <name> <goal>" }
+        }
+        const team = commandTeamRegistry.get(name)
+          ? commandTeamRegistry.setGoal(name, goal)
+          : commandTeamRegistry.create(name, `Swarm for ${goal}`, { goal })
+        return {
+          message: pretty(team),
+        }
+      }
+      if (action === "delete" && parts[1]) {
+        return {
+          message: commandTeamRegistry.delete(parts[1])
+            ? `Deleted swarm ${parts[1]}`
+            : `Swarm not found: ${parts[1]}`,
+        }
+      }
+      if (action === "plan" && parts[1]) {
+        const plan = parsePlanItems(args.replace(/^plan\s+\S+\s*/, ""))
+        if (plan.length === 0) {
+          return { message: "Usage: /swarm plan <name> <task 1 :: task 2 :: task 3>" }
+        }
+        return {
+          message: pretty(commandTeamRegistry.setPlan(parts[1], plan)),
+        }
+      }
+      if (action === "run" && parts[1]) {
+        const name = parts[1]
+        const team = commandTeamRegistry.get(name)
+        if (!team?.goal) {
+          return { message: "Usage: /swarm run <name> (create a swarm goal first with /swarm create)" }
+        }
+        const subtasks = team.plan.length > 0
+          ? team.plan
+          : [
+              `Plan the work for: ${team.goal}`,
+              `Execute the highest-value implementation step for: ${team.goal}`,
+              `Review results and summarize next actions for: ${team.goal}`,
+            ]
+        commandTeamRegistry.setStatus(name, "running")
+        try {
+          const result = await runManagedGoal(context, team.goal, {
+            via: "swarm-run",
+            isolateWorktree: true,
+            subtasks,
+            metadata: {
+              team: name,
+              swarm: "true",
+            },
+          })
+          result.tasks.forEach((task, index) => {
+            commandTeamRegistry.addTask(name, task.id)
+            const sessionId = task.metadata?.sessionId
+            if (sessionId) {
+              commandTeamRegistry.addAgent(name, sessionId)
+              commandTeamRegistry.setRole(name, sessionId, `worker-${index + 1}`)
+            }
+          })
+          commandTeamRegistry.setStatus(name, "completed")
+          return {
+            message: pretty({
+              team: commandTeamRegistry.get(name),
+              tasks: result.tasks,
+              summary: result.summary,
+            }),
+          }
+        } catch (error) {
+          commandTeamRegistry.setStatus(name, "failed")
+          return {
+            message: pretty({
+              team: commandTeamRegistry.get(name),
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          }
+        }
+      }
+      if (action === "status" && parts[1]) {
+        return {
+          message: pretty(await swarmStatus(parts[1])),
+        }
+      }
+      if (action === "review" && parts[1]) {
+        const status = (parts[2] as "pending" | "approved" | "changes_requested" | undefined) ?? "pending"
+        if (!["pending", "approved", "changes_requested"].includes(status)) {
+          return { message: "Usage: /swarm review <name> [pending|approved|changes_requested] [note]" }
+        }
+        return {
+          message: pretty(commandTeamRegistry.setReview(
+            parts[1],
+            status,
+            args.split(/\s+/).slice(3).join(" ").trim(),
+          )),
+        }
+      }
+      if (action === "merge" && parts[1]) {
+        const status = (parts[2] as "pending" | "ready" | "merged" | "blocked" | undefined) ?? "pending"
+        if (!["pending", "ready", "merged", "blocked"].includes(status)) {
+          return { message: "Usage: /swarm merge <name> [pending|ready|merged|blocked] [note]" }
+        }
+        return {
+          message: pretty(commandTeamRegistry.setMerge(
+            parts[1],
+            status,
+            args.split(/\s+/).slice(3).join(" ").trim(),
+          )),
+        }
+      }
+      if (action === "message" && parts[1]) {
+        const message = args.split(/\s+/).slice(2).join(" ").trim()
+        if (!message) {
+          return { message: "Usage: /swarm message <name> <message>" }
+        }
+        return {
+          message: pretty(commandTeamRegistry.sendMessage(parts[1], message)),
+        }
+      }
+      return {
+        message: "Usage: /swarm [list|create <name> <goal>|plan <name> <task 1 :: task 2>|run <name>|status <name>|review <name> <status> [note]|merge <name> <status> [note]|message <name> <message>|delete <name>]",
       }
     },
   })
@@ -3778,6 +3989,63 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         const payload = await context.client.mcp({ verbose: true }) as { resources?: unknown }
         return { message: pretty(payload.resources ?? []) }
       }
+      if (parts[0] === "capabilities") {
+        const payload = await context.client.mcp({ verbose: true }) as {
+          statuses?: Array<Record<string, unknown>>
+          tools?: Array<Record<string, unknown>>
+          resources?: Array<Record<string, unknown>>
+          resourceTemplates?: Array<Record<string, unknown>>
+        }
+        const servers = new Map<string, Record<string, unknown>>()
+        const ensureServer = (name: string) => {
+          if (!servers.has(name)) {
+            servers.set(name, {
+              name,
+              status: null,
+              toolCount: 0,
+              resourceCount: 0,
+              resourceTemplateCount: 0,
+              tools: [] as string[],
+              resources: [] as string[],
+              resourceTemplates: [] as string[],
+            })
+          }
+          return servers.get(name)!
+        }
+        for (const status of payload.statuses ?? []) {
+          const name = extractString(status, "name")
+          ensureServer(name).status = status
+        }
+        for (const tool of payload.tools ?? []) {
+          const name = extractString(tool, "server", "builtin")
+          const view = ensureServer(name)
+          view.toolCount = Number(view.toolCount ?? 0) + 1
+          const tools = view.tools as string[]
+          tools.push(extractString(tool, "name"))
+        }
+        for (const resource of payload.resources ?? []) {
+          const name = extractString(resource, "server")
+          const view = ensureServer(name)
+          view.resourceCount = Number(view.resourceCount ?? 0) + 1
+          const resources = view.resources as string[]
+          resources.push(extractString(resource, "uri"))
+        }
+        for (const template of payload.resourceTemplates ?? []) {
+          const name = extractString(template, "server")
+          const view = ensureServer(name)
+          view.resourceTemplateCount = Number(view.resourceTemplateCount ?? 0) + 1
+          const resourceTemplates = view.resourceTemplates as string[]
+          resourceTemplates.push(extractString(template, "uriTemplate"))
+        }
+        return {
+          message: pretty({
+            serverCount: servers.size,
+            servers: [...servers.values()].sort((left, right) =>
+              extractString(left, "name").localeCompare(extractString(right, "name")),
+            ),
+          }),
+        }
+      }
       if (parts[0] === "reconnect") {
         return { message: pretty(await context.client.mcpReconnect(parts[1])) }
       }
@@ -3817,7 +4085,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         const payload = await context.client.mcpReadResource(parts[1], parts.slice(2).join(" "))
         return { message: String(payload.content ?? "") }
       }
-      return { message: "Usage: /mcp [status|tools|resources|templates|reconnect [server]|add <name> <command> [args...]|remove <server>|auth <server> <env|bearer> <value> [--key KEY]|read <server> <uri>]" }
+      return { message: "Usage: /mcp [status|tools|resources|templates|capabilities|reconnect [server]|add <name> <command> [args...]|remove <server>|auth <server> <env|bearer> <value> [--key KEY]|read <server> <uri>]" }
     },
   })
 
