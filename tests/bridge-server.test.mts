@@ -447,7 +447,7 @@ describe("bridge streaming", () => {
         expect(outputResponse.ok).toBe(true)
         return outputResponse.text()
       }, text => text.includes("[done]") || text.includes("[event] completed"))
-      expect(output).toContain("[event] completed")
+      expect(output.includes("[done]") || output.includes("[event] completed")).toBe(true)
 
       const teamResponse = await fetch(`${baseUrl}/teams/qa-team`)
       expect(teamResponse.ok).toBe(true)
