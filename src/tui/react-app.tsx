@@ -367,7 +367,11 @@ function blockToText(block: ContentBlock): string {
   return `${block.name} ${block.result}`
 }
 
-function sessionToTranscript(session: SessionRecord | null, assistantBuffer: string): TranscriptRow[] {
+export function sessionToTranscript(
+  session: SessionRecord | null,
+  assistantBuffer: string,
+  pendingUserMessages: string[] = [],
+): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   if (session) {
     for (const message of session.messages.slice(-16)) {
@@ -396,6 +400,14 @@ function sessionToTranscript(session: SessionRecord | null, assistantBuffer: str
       }
     }
   }
+  for (const message of pendingUserMessages) {
+    if (message.trim()) {
+      rows.push({
+        kind: "user",
+        text: message,
+      })
+    }
+  }
   if (assistantBuffer.trim()) {
     rows.push({
       kind: "assistant",
@@ -415,8 +427,14 @@ function sessionToTranscript(session: SessionRecord | null, assistantBuffer: str
   return rows
 }
 
-function hasRealConversation(session: SessionRecord | null, assistantBuffer: string): boolean {
-  return Boolean(session && session.messages.length > 0) || assistantBuffer.trim().length > 0
+function hasRealConversation(
+  session: SessionRecord | null,
+  assistantBuffer: string,
+  pendingUserMessages: string[] = [],
+): boolean {
+  return Boolean(session && session.messages.length > 0)
+    || assistantBuffer.trim().length > 0
+    || pendingUserMessages.some(message => message.trim().length > 0)
 }
 
 function commandHints(helpText: string, buffer: string): string[] {
@@ -1356,13 +1374,14 @@ function ModalHost(props: {
 function ConversationPane(props: {
   session: SessionRecord | null
   assistantBuffer: string
+  pendingUserMessages: string[]
   showWelcome: boolean
 }) {
-  if (!props.showWelcome && !props.session && !props.assistantBuffer.trim()) {
+  if (!props.showWelcome && !props.session && !props.assistantBuffer.trim() && props.pendingUserMessages.length === 0) {
     return <Box flexDirection="column" flexGrow={1} />
   }
-  const showWelcome = props.showWelcome && !hasRealConversation(props.session, props.assistantBuffer)
-  const rows = showWelcome ? [] : sessionToTranscript(props.session, props.assistantBuffer)
+  const showWelcome = props.showWelcome && !hasRealConversation(props.session, props.assistantBuffer, props.pendingUserMessages)
+  const rows = showWelcome ? [] : sessionToTranscript(props.session, props.assistantBuffer, props.pendingUserMessages)
   return (
     <Box flexDirection="column" flexGrow={1}>
       {showWelcome ? <WelcomeBanner /> : null}
@@ -1619,6 +1638,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
   const [usage, setUsage] = useState<UsageView>({})
   const [events, setEvents] = useState<UiEvent[]>([])
   const [assistantBuffer, setAssistantBuffer] = useState("")
+  const [pendingUserMessages, setPendingUserMessages] = useState<string[]>([])
   const [inspectorText, setInspectorText] = useState("")
   const [bridgeSnapshot, setBridgeSnapshot] = useState<BridgeSnapshot>({
     reachable: false,
@@ -2639,6 +2659,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
     startTransition(() => {
       setRunning(true)
       setActiveRequestId(tracked.requestId)
+      setPendingUserMessages(previous => [...previous, trimmed].slice(-4))
       setAssistantBuffer("")
       setInspectorText("")
       setStatusLine(`Running in ${selectedSessionId || "new session"}...`)
@@ -2670,6 +2691,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       startTransition(() => {
         setRunning(false)
         setActiveRequestId(null)
+        setPendingUserMessages([])
       })
     }
   })
@@ -3075,6 +3097,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         <ConversationPane
           session={selectedSession}
           assistantBuffer={assistantBuffer}
+          pendingUserMessages={pendingUserMessages}
           showWelcome={ready}
         />
       </Box>

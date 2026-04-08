@@ -17,6 +17,7 @@ import {
   resolvePromptInputBorderColor,
   resolveUiPresentation,
   resolveStatusBarStats,
+  sessionToTranscript,
   shouldRenderBridgePanel,
   shouldRenderMcpPanel,
 } from "../src/tui/react-app.tsx"
@@ -362,5 +363,14 @@ describe("TUI view model", () => {
   test("prompt input border follows focus and running state", () => {
     expect(resolvePromptInputBorderColor(false, { primaryColor: "cyan" })).toBe("blue")
     expect(resolvePromptInputBorderColor(true, { primaryColor: "cyan" })).toBe("yellow")
+  })
+
+  test("submitted prompts are shown optimistically in the transcript", () => {
+    expect(sessionToTranscript(null, "", ["follow-up prompt"])).toEqual([
+      {
+        kind: "user",
+        text: "follow-up prompt",
+      },
+    ])
   })
 })
