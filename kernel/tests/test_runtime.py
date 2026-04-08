@@ -175,6 +175,84 @@ class KernelRuntimeTests(unittest.TestCase):
                 "name": "cron_toggle",
                 "input": {"name": "daily-smoke", "enabled": False},
             }, session)
+            openharness_aligned_tools = {
+                "ask_user_question",
+                "notebook_edit",
+                "skill",
+                "config",
+                "brief",
+                "sleep",
+                "enter_worktree",
+                "exit_worktree",
+                "enter_plan_mode",
+                "exit_plan_mode",
+                "remote_trigger",
+                "task_create",
+                "task_get",
+                "task_list",
+                "task_stop",
+                "task_output",
+                "task_update",
+                "agent",
+                "send_message",
+                "team_create",
+                "team_delete",
+            }
+            tool_names = {tool["name"] for tool in kernel.tools_info()["tools"]}
+            question_tool = kernel._execute_tool({
+                "name": "ask_user_question",
+                "input": {"question": "Ship it?", "choices": ["yes", "no"]},
+            }, session)
+            notebook_path = Path(root, "notebook.ipynb")
+            notebook_path.write_text(json.dumps({"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}), "utf-8")
+            notebook_tool = kernel._execute_tool({
+                "name": "notebook_edit",
+                "input": {"path": "notebook.ipynb", "mode": "append", "cellType": "markdown", "source": "# Notes\n"},
+            }, session)
+            skill_tool = kernel._execute_tool({"name": "skill", "input": {"query": "missing"}}, session)
+            config_tool = kernel._execute_tool({"name": "config", "input": {"section": "provider.kind"}}, session)
+            brief_tool = kernel._execute_tool({"name": "brief", "input": {"sessionId": session["id"], "maxChars": 2000}}, session)
+            sleep_tool = kernel._execute_tool({"name": "sleep", "input": {"seconds": 0}}, session)
+            plan_tool = kernel._execute_tool({"name": "enter_plan_mode", "input": {"note": "plan first"}}, session)
+            exit_plan_tool = kernel._execute_tool({"name": "exit_plan_mode", "input": {}}, session)
+            worktree_tool = kernel._execute_tool({"name": "enter_worktree", "input": {"label": "tool-test"}}, session)
+            exit_worktree_tool = kernel._execute_tool({"name": "exit_worktree", "input": {}}, session)
+            remote_trigger_tool = kernel._execute_tool({"name": "remote_trigger", "input": {"name": "ci", "payload": {"ok": True}}}, session)
+            task_create_tool = kernel._execute_tool({
+                "name": "task_create",
+                "input": {"prompt": "check docs", "label": "docs-check"},
+            }, session)
+            created_task = json.loads(task_create_tool["output"])
+            task_update_tool = kernel._execute_tool({
+                "name": "task_update",
+                "input": {"taskId": created_task["id"], "status": "completed", "output": "done"},
+            }, session)
+            task_output_tool = kernel._execute_tool({
+                "name": "task_output",
+                "input": {"taskId": created_task["id"]},
+            }, session)
+            task_stop_tool = kernel._execute_tool({
+                "name": "task_stop",
+                "input": {"taskId": created_task["id"]},
+            }, session)
+            task_get_tool = kernel._execute_tool({
+                "name": "task_get",
+                "input": {"taskId": created_task["id"]},
+            }, session)
+            task_list_tool = kernel._execute_tool({"name": "task_list", "input": {}}, session)
+            agent_tool = kernel._execute_tool({
+                "name": "agent",
+                "input": {"prompt": "hello from sub-agent", "isolateWorktree": False},
+            }, session)
+            team_create_tool = kernel._execute_tool({
+                "name": "team_create",
+                "input": {"name": "qa-team", "description": "QA"},
+            }, session)
+            send_message_tool = kernel._execute_tool({
+                "name": "send_message",
+                "input": {"team": "qa-team", "message": "review complete", "sender": "tester"},
+            }, session)
+            team_delete_tool = kernel._execute_tool({"name": "team_delete", "input": {"name": "qa-team"}}, session)
             instructions = kernel.project_instructions_info(True)
             system_prompt = kernel._build_prompt(session, "follow project rules", [])
 
@@ -198,6 +276,34 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertIn('"enabled": false', cron_disabled["output"])
             self.assertEqual(kernel.cron_info()["count"], 1)
             self.assertTrue(kernel.cron_delete("daily-smoke")["deleted"])
+            self.assertGreaterEqual(kernel.tools_info()["count"], 44)
+            self.assertTrue(openharness_aligned_tools.issubset(tool_names))
+            self.assertTrue(question_tool["ok"])
+            self.assertIn("Ship it?", question_tool["output"])
+            self.assertTrue(notebook_tool["ok"])
+            self.assertEqual(json.loads(notebook_path.read_text("utf-8"))["cells"][0]["cell_type"], "markdown")
+            self.assertTrue(skill_tool["ok"])
+            self.assertTrue(config_tool["ok"])
+            self.assertIn("internal-test", config_tool["output"])
+            self.assertTrue(brief_tool["ok"])
+            self.assertTrue(sleep_tool["ok"])
+            self.assertTrue(plan_tool["ok"])
+            self.assertTrue(exit_plan_tool["ok"])
+            self.assertTrue(worktree_tool["ok"])
+            self.assertTrue(exit_worktree_tool["ok"])
+            self.assertTrue(remote_trigger_tool["ok"])
+            self.assertTrue(task_create_tool["ok"])
+            self.assertTrue(task_update_tool["ok"])
+            self.assertEqual(task_output_tool["output"], "done")
+            self.assertTrue(task_stop_tool["ok"])
+            self.assertIn('"status": "killed"', task_get_tool["output"])
+            self.assertIn(created_task["id"], task_list_tool["output"])
+            self.assertTrue(agent_tool["ok"])
+            self.assertIn("Internal test provider response", agent_tool["output"])
+            self.assertTrue(team_create_tool["ok"])
+            self.assertTrue(send_message_tool["ok"])
+            self.assertIn("review complete", send_message_tool["output"])
+            self.assertTrue(team_delete_tool["ok"])
             self.assertEqual(instructions["count"], 3)
             self.assertIn("Always mention project instructions", instructions["files"][0]["content"])
             self.assertIn("Project Instructions", system_prompt)
@@ -206,7 +312,6 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertIn("simplify branch", system_prompt)
             self.assertIn("Output Style: review", system_prompt)
             self.assertIn("Findings first", system_prompt)
-            self.assertGreaterEqual(kernel.tools_info()["count"], 1)
             self.assertEqual(kernel.compact_policy(session["id"])["sessionId"], session["id"])
             context = kernel.context_info(session["id"])
             self.assertEqual(context["session"]["id"], session["id"])

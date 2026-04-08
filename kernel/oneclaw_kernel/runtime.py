@@ -1559,6 +1559,12 @@ class OneClawKernel:
     def _cron_path(self) -> Path:
         return Path(self.config["homeDir"]) / "cron" / "jobs.json"
 
+    def _kernel_tasks_path(self) -> Path:
+        return Path(self.config["homeDir"]) / "tasks" / "kernel_tasks.json"
+
+    def _kernel_teams_path(self) -> Path:
+        return Path(self.config["homeDir"]) / "teams" / "kernel_teams.json"
+
     def _read_todo_items(self, session_id: str) -> list[dict[str, Any]]:
         raw = read_text_if_exists(self._todo_path(session_id)) or "[]"
         try:
@@ -2377,6 +2383,220 @@ class OneClawKernel:
         self._write_cron_jobs(jobs)
         return {**self.cron_info(name), "name": name, "jobEnabled": bool(enabled)}
 
+    def _read_kernel_tasks(self) -> list[dict[str, Any]]:
+        raw = read_text_if_exists(self._kernel_tasks_path()) or "[]"
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        tasks: list[dict[str, Any]] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            task_id = str(item.get("id") or "")
+            if not task_id:
+                continue
+            tasks.append({
+                "id": task_id,
+                "label": str(item.get("label") or item.get("prompt") or task_id),
+                "prompt": str(item.get("prompt") or ""),
+                "status": str(item.get("status") or "pending"),
+                "output": str(item.get("output") or ""),
+                "sessionId": item.get("sessionId"),
+                "createdAt": str(item.get("createdAt") or now_iso()),
+                "updatedAt": str(item.get("updatedAt") or item.get("createdAt") or now_iso()),
+                "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+            })
+        return sorted(tasks, key=lambda task: str(task.get("updatedAt") or ""), reverse=True)
+
+    def _write_kernel_tasks(self, tasks: list[dict[str, Any]]) -> None:
+        write_text(self._kernel_tasks_path(), json.dumps(tasks, indent=2))
+
+    def kernel_task_list(self, status: str | None = None) -> dict[str, Any]:
+        tasks = self._read_kernel_tasks()
+        if status:
+            tasks = [task for task in tasks if task["status"] == status]
+        return {
+            "path": str(self._kernel_tasks_path()),
+            "count": len(tasks),
+            "tasks": tasks,
+        }
+
+    def kernel_task_get(self, task_id: str) -> dict[str, Any]:
+        task = next((item for item in self._read_kernel_tasks() if item["id"] == task_id), None)
+        if not task:
+            raise RuntimeError(f"Task not found: {task_id}")
+        return task
+
+    def kernel_task_create(
+        self,
+        prompt: str,
+        label: str | None = None,
+        cwd: str | None = None,
+        run_now: bool = False,
+        metadata: dict[str, Any] | None = None,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        normalized_prompt = prompt.strip()
+        if not normalized_prompt:
+            raise RuntimeError("Task prompt is required.")
+        now = now_iso()
+        task = {
+            "id": random_id("task"),
+            "label": label or normalized_prompt[:80],
+            "prompt": normalized_prompt,
+            "status": "pending",
+            "output": "",
+            "sessionId": None,
+            "createdAt": now,
+            "updatedAt": now,
+            "metadata": dict(metadata or {}),
+        }
+        tasks = self._read_kernel_tasks()
+        tasks.insert(0, task)
+        self._write_kernel_tasks(tasks)
+        if not run_now:
+            return task
+        task["status"] = "running"
+        task["updatedAt"] = now_iso()
+        self._write_kernel_tasks([task if item["id"] == task["id"] else item for item in self._read_kernel_tasks()])
+        try:
+            result = self.run_prompt(
+                normalized_prompt,
+                cwd=cwd,
+                metadata={
+                    "via": "task-tool",
+                    "taskId": task["id"],
+                    "isolateWorktree": bool((metadata or {}).get("isolateWorktree")),
+                    **dict(metadata or {}),
+                },
+                should_cancel=should_cancel,
+            )
+            task["status"] = "completed"
+            task["output"] = str(result.get("text") or "")
+            task["sessionId"] = result.get("sessionId")
+        except Exception as error:
+            task["status"] = "failed"
+            task["output"] = str(error)
+        task["updatedAt"] = now_iso()
+        self._write_kernel_tasks([task if item["id"] == task["id"] else item for item in self._read_kernel_tasks()])
+        return task
+
+    def kernel_task_update(
+        self,
+        task_id: str,
+        status: str | None = None,
+        output: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        tasks = self._read_kernel_tasks()
+        updated: dict[str, Any] | None = None
+        allowed_statuses = {"pending", "running", "completed", "failed", "killed", "cancelled", "blocked"}
+        for task in tasks:
+            if task["id"] != task_id:
+                continue
+            if status:
+                if status not in allowed_statuses:
+                    raise RuntimeError(f"Unsupported task status: {status}")
+                task["status"] = status
+            if output is not None:
+                task["output"] = output
+            if metadata:
+                task["metadata"] = {**dict(task.get("metadata") or {}), **metadata}
+            task["updatedAt"] = now_iso()
+            updated = task
+            break
+        if not updated:
+            raise RuntimeError(f"Task not found: {task_id}")
+        self._write_kernel_tasks(tasks)
+        return updated
+
+    def kernel_task_stop(self, task_id: str) -> dict[str, Any]:
+        return self.kernel_task_update(task_id, "killed", None, {"stoppedAt": now_iso()})
+
+    def _read_kernel_teams(self) -> list[dict[str, Any]]:
+        raw = read_text_if_exists(self._kernel_teams_path()) or "[]"
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        teams: list[dict[str, Any]] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            teams.append({
+                "name": name,
+                "description": str(item.get("description") or ""),
+                "agents": [str(agent) for agent in item.get("agents", []) if isinstance(agent, str)],
+                "messages": [dict(message) for message in item.get("messages", []) if isinstance(message, dict)],
+                "createdAt": str(item.get("createdAt") or now_iso()),
+                "updatedAt": str(item.get("updatedAt") or item.get("createdAt") or now_iso()),
+            })
+        return sorted(teams, key=lambda team: team["name"])
+
+    def _write_kernel_teams(self, teams: list[dict[str, Any]]) -> None:
+        write_text(self._kernel_teams_path(), json.dumps(sorted(teams, key=lambda team: team["name"]), indent=2))
+
+    def kernel_team_create(self, name: str, description: str = "") -> dict[str, Any]:
+        normalized_name = name.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", normalized_name):
+            raise RuntimeError("Team name must use letters, numbers, dot, dash, or underscore.")
+        teams = self._read_kernel_teams()
+        if any(team["name"] == normalized_name for team in teams):
+            raise RuntimeError(f"Team already exists: {normalized_name}")
+        now = now_iso()
+        team = {
+            "name": normalized_name,
+            "description": description,
+            "agents": [],
+            "messages": [],
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        teams.append(team)
+        self._write_kernel_teams(teams)
+        return team
+
+    def kernel_team_delete(self, name: str) -> dict[str, Any]:
+        teams = self._read_kernel_teams()
+        filtered = [team for team in teams if team["name"] != name]
+        self._write_kernel_teams(filtered)
+        return {
+            "name": name,
+            "deleted": len(filtered) != len(teams),
+            "teams": filtered,
+        }
+
+    def kernel_team_message(self, team_name: str, message: str, sender: str = "agent") -> dict[str, Any]:
+        if not message.strip():
+            raise RuntimeError("Message is required.")
+        teams = self._read_kernel_teams()
+        team = next((item for item in teams if item["name"] == team_name), None)
+        if not team:
+            team = self.kernel_team_create(team_name)
+            teams = self._read_kernel_teams()
+            team = next(item for item in teams if item["name"] == team_name)
+        entry = {
+            "id": random_id("msg"),
+            "sender": sender or "agent",
+            "message": message,
+            "createdAt": now_iso(),
+        }
+        team["messages"].append(entry)
+        team["updatedAt"] = now_iso()
+        self._write_kernel_teams(teams)
+        return {
+            "team": team,
+            "message": entry,
+        }
+
     def hooks_info(self) -> dict[str, Any]:
         return {
             "hooks": self.hooks.list(),
@@ -3103,6 +3323,227 @@ class OneClawKernel:
                     },
                 },
             },
+            {
+                "name": "ask_user_question",
+                "description": "Prepare a clarification question for the user with optional choices.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["question"],
+                    "properties": {
+                        "question": {"type": "string"},
+                        "choices": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
+            {
+                "name": "notebook_edit",
+                "description": "Edit a Jupyter notebook cell by replacing, inserting, appending, or deleting a cell.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["path"],
+                    "properties": {
+                        "path": {"type": "string"},
+                        "cellIndex": {"type": "number"},
+                        "cellType": {"type": "string"},
+                        "source": {"type": "string"},
+                        "mode": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "name": "skill",
+                "description": "Search or read available OneClaw skills.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "name": {"type": "string"},
+                        "includeBody": {"type": "boolean"},
+                    },
+                },
+            },
+            {
+                "name": "config",
+                "description": "Read or update OneClaw runtime configuration.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string"},
+                        "section": {"type": "string"},
+                        "patch": {"type": "object"},
+                    },
+                },
+            },
+            {
+                "name": "brief",
+                "description": "Generate a concise session/context brief.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "sessionId": {"type": "string"},
+                        "maxChars": {"type": "number"},
+                    },
+                },
+            },
+            {
+                "name": "sleep",
+                "description": "Pause execution for a bounded number of seconds.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"seconds": {"type": "number"}},
+                },
+            },
+            {
+                "name": "enter_worktree",
+                "description": "Move the current session into an isolated git worktree when worktree isolation is enabled.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "cwd": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "name": "exit_worktree",
+                "description": "Exit and clean up the current session's isolated worktree.",
+                "readOnly": False,
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "enter_plan_mode",
+                "description": "Mark the current session as being in planning mode.",
+                "readOnly": False,
+                "inputSchema": {"type": "object", "properties": {"note": {"type": "string"}}},
+            },
+            {
+                "name": "exit_plan_mode",
+                "description": "Mark the current session as leaving planning mode.",
+                "readOnly": False,
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "remote_trigger",
+                "description": "Record a remote trigger event for bridge/channel automation.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "payload": {"type": "object"},
+                    },
+                },
+            },
+            {
+                "name": "task_create",
+                "description": "Create a managed kernel task, optionally running it immediately in an isolated session.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["prompt"],
+                    "properties": {
+                        "prompt": {"type": "string"},
+                        "label": {"type": "string"},
+                        "cwd": {"type": "string"},
+                        "runNow": {"type": "boolean"},
+                        "isolateWorktree": {"type": "boolean"},
+                    },
+                },
+            },
+            {
+                "name": "task_get",
+                "description": "Read a managed kernel task.",
+                "readOnly": True,
+                "inputSchema": {"type": "object", "required": ["taskId"], "properties": {"taskId": {"type": "string"}}},
+            },
+            {
+                "name": "task_list",
+                "description": "List managed kernel tasks.",
+                "readOnly": True,
+                "inputSchema": {"type": "object", "properties": {"status": {"type": "string"}}},
+            },
+            {
+                "name": "task_stop",
+                "description": "Mark a managed kernel task as killed.",
+                "readOnly": False,
+                "inputSchema": {"type": "object", "required": ["taskId"], "properties": {"taskId": {"type": "string"}}},
+            },
+            {
+                "name": "task_output",
+                "description": "Read managed kernel task output.",
+                "readOnly": True,
+                "inputSchema": {"type": "object", "required": ["taskId"], "properties": {"taskId": {"type": "string"}}},
+            },
+            {
+                "name": "task_update",
+                "description": "Update managed kernel task status, output, or metadata.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["taskId"],
+                    "properties": {
+                        "taskId": {"type": "string"},
+                        "status": {"type": "string"},
+                        "output": {"type": "string"},
+                        "metadata": {"type": "object"},
+                    },
+                },
+            },
+            {
+                "name": "agent",
+                "description": "Run a sub-agent prompt in a separate session.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["prompt"],
+                    "properties": {
+                        "prompt": {"type": "string"},
+                        "cwd": {"type": "string"},
+                        "isolateWorktree": {"type": "boolean"},
+                    },
+                },
+            },
+            {
+                "name": "send_message",
+                "description": "Send a message to a lightweight kernel team mailbox.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["team", "message"],
+                    "properties": {
+                        "team": {"type": "string"},
+                        "message": {"type": "string"},
+                        "sender": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "name": "team_create",
+                "description": "Create a lightweight kernel team.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "name": "team_delete",
+                "description": "Delete a lightweight kernel team.",
+                "readOnly": False,
+                "inputSchema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}},
+            },
         ]
         return [*builtin, *self.plugins.get_tool_specs(), *self.mcp.tool_specs()]
 
@@ -3126,7 +3567,23 @@ class OneClawKernel:
             candidate_paths.append(os.path.realpath(os.path.join(session["cwd"], input_payload["filePath"])))
         if isinstance(input_payload.get("cwd"), str):
             candidate_paths.append(os.path.realpath(os.path.join(session["cwd"], input_payload["cwd"])))
-        if tool_name in {"list_files", "read_file", "search_files", "glob_files", "run_shell", "workspace_status", "code_symbols", "lsp"} and not candidate_paths:
+        default_cwd_tools = {
+            "list_files",
+            "read_file",
+            "search_files",
+            "glob_files",
+            "run_shell",
+            "workspace_status",
+            "code_symbols",
+            "lsp",
+            "notebook_edit",
+            "enter_worktree",
+            "exit_worktree",
+            "task_create",
+            "agent",
+            "brief",
+        }
+        if tool_name in default_cwd_tools and not candidate_paths:
             candidate_paths.append(session["cwd"])
         for candidate in candidate_paths:
             if not is_inside_roots(candidate, self._permission_roots()):
@@ -4000,6 +4457,258 @@ class OneClawKernel:
             return {"ok": True, "output": f"Updated {len(normalized)} todo item(s)"}
         if name == "show_memory":
             return {"ok": True, "output": self._read_session_memory(session["id"]) or "(no memory yet)"}
+        if name == "ask_user_question":
+            question = str(input_payload.get("question") or "").strip()
+            if not question:
+                return {"ok": False, "output": "Missing required field: question"}
+            choices = [str(choice) for choice in input_payload.get("choices", []) if isinstance(choice, str)]
+            payload = {
+                "question": question,
+                "choices": choices,
+                "instruction": "Ask this question in the assistant response and wait for the user's answer.",
+            }
+            if on_event:
+                on_event({
+                    "type": "question_request",
+                    "sessionId": session["id"],
+                    **payload,
+                })
+            return {"ok": True, "output": json.dumps(payload, indent=2)}
+        if name == "notebook_edit":
+            target_path = os.path.realpath(os.path.join(cwd, str(input_payload.get("path", "."))))
+            mode = str(input_payload.get("mode") or "replace").lower()
+            cell_type = str(input_payload.get("cellType") or "code")
+            source = str(input_payload.get("source") or "")
+            try:
+                notebook = json.loads(Path(target_path).read_text("utf-8"))
+                cells = notebook.setdefault("cells", [])
+                if not isinstance(cells, list):
+                    return {"ok": False, "output": "Invalid notebook: cells must be an array"}
+                cell_index = int(input_payload.get("cellIndex", len(cells)))
+                if mode == "append":
+                    cell_index = len(cells)
+                    mode = "insert"
+                if mode == "delete":
+                    if cell_index < 0 or cell_index >= len(cells):
+                        return {"ok": False, "output": f"Notebook cell index out of range: {cell_index}"}
+                    cells.pop(cell_index)
+                else:
+                    new_cell = {
+                        "cell_type": "markdown" if cell_type == "markdown" else "code",
+                        "metadata": {},
+                        "source": source.splitlines(keepends=True) or [source],
+                    }
+                    if new_cell["cell_type"] == "code":
+                        new_cell.update({"execution_count": None, "outputs": []})
+                    if mode == "insert":
+                        bounded_index = max(0, min(cell_index, len(cells)))
+                        cells.insert(bounded_index, new_cell)
+                        cell_index = bounded_index
+                    else:
+                        if cell_index < 0 or cell_index >= len(cells):
+                            return {"ok": False, "output": f"Notebook cell index out of range: {cell_index}"}
+                        cells[cell_index] = new_cell
+                Path(target_path).write_text(json.dumps(notebook, indent=2), "utf-8")
+                return {"ok": True, "output": f"Notebook {mode} applied at cell {cell_index}: {display_path(cwd, target_path)}"}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "skill":
+            query = input_payload.get("name") or input_payload.get("query")
+            return {
+                "ok": True,
+                "output": json.dumps(
+                    self.skills_info(str(query) if isinstance(query, str) and query else None, bool(input_payload.get("includeBody"))),
+                    indent=2,
+                ),
+            }
+        if name == "config":
+            action = str(input_payload.get("action") or "get").lower()
+            try:
+                if action in {"set", "patch", "update"}:
+                    patch = input_payload.get("patch")
+                    if not isinstance(patch, dict):
+                        return {"ok": False, "output": "Missing required field for config update: patch"}
+                    return {"ok": True, "output": json.dumps(self.update_config_patch(patch), indent=2)}
+                section = input_payload.get("section")
+                return {"ok": True, "output": json.dumps(self.config_info(section if isinstance(section, str) else None), indent=2)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "brief":
+            session_id = input_payload.get("sessionId") if isinstance(input_payload.get("sessionId"), str) else session["id"]
+            max_chars = max(256, min(int(input_payload.get("maxChars") or 4000), 20000))
+            try:
+                payload = {
+                    "status": self.status_info(session_id),
+                    "context": self.context_info(session_id),
+                    "memory": self._read_session_memory(session_id) if session_id else "",
+                }
+                return {"ok": True, "output": limit_text(json.dumps(payload, indent=2), max_chars)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "sleep":
+            seconds = max(0.0, min(float(input_payload.get("seconds") or 1), 30.0))
+            deadline = time.time() + seconds
+            while time.time() < deadline:
+                self._raise_if_cancelled(should_cancel)
+                time.sleep(min(0.1, max(0.0, deadline - time.time())))
+            return {"ok": True, "output": f"Slept for {seconds:.2f}s"}
+        if name == "enter_worktree":
+            label = str(input_payload.get("label") or f"session-{session['id']}")
+            target_cwd = os.path.realpath(os.path.join(cwd, str(input_payload.get("cwd", "."))))
+            prepared = self.worktrees.prepare(label, target_cwd)
+            if session["id"] in self.active_worktrees:
+                self.active_worktrees.pop(session["id"]).cleanup()
+            session["cwd"] = self._normalize_and_validate_cwd(prepared.cwd)
+            session.setdefault("metadata", {})["worktree"] = {
+                "isolated": prepared.isolated,
+                "sourceCwd": prepared.source_cwd,
+                "targetPath": prepared.target_path,
+            }
+            if prepared.isolated:
+                self.active_worktrees[session["id"]] = prepared
+            session["updatedAt"] = now_iso()
+            self.sessions[session["id"]] = session
+            self._persist_session(session)
+            return {"ok": True, "output": json.dumps(session["metadata"]["worktree"], indent=2)}
+        if name == "exit_worktree":
+            prepared = self.active_worktrees.pop(session["id"], None)
+            if not prepared:
+                return {"ok": True, "output": "No active isolated worktree for this session."}
+            source_cwd = prepared.source_cwd
+            prepared.cleanup()
+            session["cwd"] = self._normalize_and_validate_cwd(source_cwd)
+            session.setdefault("metadata", {}).pop("worktree", None)
+            session["updatedAt"] = now_iso()
+            self.sessions[session["id"]] = session
+            self._persist_session(session)
+            return {"ok": True, "output": f"Exited worktree; cwd restored to {source_cwd}"}
+        if name == "enter_plan_mode":
+            session.setdefault("metadata", {})["planMode"] = True
+            if input_payload.get("note"):
+                session["metadata"]["planNote"] = str(input_payload.get("note"))
+            session["updatedAt"] = now_iso()
+            self._persist_session(session)
+            return {"ok": True, "output": "Entered plan mode."}
+        if name == "exit_plan_mode":
+            session.setdefault("metadata", {})["planMode"] = False
+            session["updatedAt"] = now_iso()
+            self._persist_session(session)
+            return {"ok": True, "output": "Exited plan mode."}
+        if name == "remote_trigger":
+            trigger_name = str(input_payload.get("name") or "").strip()
+            if not trigger_name:
+                return {"ok": False, "output": "Missing required field: name"}
+            event = {
+                "type": "remote_trigger",
+                "name": trigger_name,
+                "payload": input_payload.get("payload") if isinstance(input_payload.get("payload"), dict) else {},
+                "sessionId": session["id"],
+            }
+            self.record_event(event)
+            return {"ok": True, "output": json.dumps(event, indent=2)}
+        if name == "task_create":
+            try:
+                created = self.kernel_task_create(
+                    str(input_payload.get("prompt") or ""),
+                    input_payload.get("label") if isinstance(input_payload.get("label"), str) else None,
+                    input_payload.get("cwd") if isinstance(input_payload.get("cwd"), str) else cwd,
+                    bool(input_payload.get("runNow")),
+                    {
+                        "parentSessionId": session["id"],
+                        "isolateWorktree": bool(input_payload.get("isolateWorktree")),
+                    },
+                    should_cancel,
+                )
+                return {"ok": True, "output": json.dumps(created, indent=2)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "task_get":
+            try:
+                return {"ok": True, "output": json.dumps(self.kernel_task_get(str(input_payload.get("taskId") or "")), indent=2)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "task_list":
+            status = input_payload.get("status")
+            return {"ok": True, "output": json.dumps(self.kernel_task_list(status if isinstance(status, str) else None), indent=2)}
+        if name == "task_stop":
+            try:
+                return {"ok": True, "output": json.dumps(self.kernel_task_stop(str(input_payload.get("taskId") or "")), indent=2)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "task_output":
+            try:
+                task = self.kernel_task_get(str(input_payload.get("taskId") or ""))
+                return {"ok": True, "output": task.get("output") or "(no output)"}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "task_update":
+            try:
+                return {
+                    "ok": True,
+                    "output": json.dumps(
+                        self.kernel_task_update(
+                            str(input_payload.get("taskId") or ""),
+                            input_payload.get("status") if isinstance(input_payload.get("status"), str) else None,
+                            input_payload.get("output") if isinstance(input_payload.get("output"), str) else None,
+                            input_payload.get("metadata") if isinstance(input_payload.get("metadata"), dict) else None,
+                        ),
+                        indent=2,
+                    ),
+                }
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "agent":
+            prompt = str(input_payload.get("prompt") or "").strip()
+            if not prompt:
+                return {"ok": False, "output": "Missing required field: prompt"}
+            try:
+                result = self.run_prompt(
+                    prompt,
+                    cwd=input_payload.get("cwd") if isinstance(input_payload.get("cwd"), str) else cwd,
+                    metadata={
+                        "via": "agent-tool-subtask",
+                        "parentSessionId": session["id"],
+                        "isolateWorktree": bool(input_payload.get("isolateWorktree", True)),
+                    },
+                    should_cancel=should_cancel,
+                )
+                return {"ok": True, "output": json.dumps(result, indent=2)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "send_message":
+            try:
+                return {
+                    "ok": True,
+                    "output": json.dumps(
+                        self.kernel_team_message(
+                            str(input_payload.get("team") or ""),
+                            str(input_payload.get("message") or ""),
+                            str(input_payload.get("sender") or "agent"),
+                        ),
+                        indent=2,
+                    ),
+                }
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "team_create":
+            try:
+                return {
+                    "ok": True,
+                    "output": json.dumps(
+                        self.kernel_team_create(
+                            str(input_payload.get("name") or ""),
+                            str(input_payload.get("description") or ""),
+                        ),
+                        indent=2,
+                    ),
+                }
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "team_delete":
+            try:
+                return {"ok": True, "output": json.dumps(self.kernel_team_delete(str(input_payload.get("name") or "")), indent=2)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
         plugin_tool = self.plugins.find_tool(name)
         if plugin_tool:
             return self._execute_plugin_tool(plugin_tool, input_payload, session, should_cancel)

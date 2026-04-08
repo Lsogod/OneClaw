@@ -51,6 +51,7 @@
 <h3>Harness Toolkit</h3>
 
 <ul>
+  <li>44 个内置 kernel tools</li>
   <li>文件、搜索、编辑、shell</li>
   <li>workspace status</li>
   <li>todo 工具</li>
@@ -366,6 +367,8 @@ DELETE /channels/:name
 
 OneClaw 使用项目级 `.oneclaw/artifacts/` 管理本地 artifact。它用于沉淀 tool result、swarm summary、诊断包和导出的文本结果，不依赖 bridge server。
 
+当前 kernel 内置 `44` 个 tools，覆盖 OpenHarness 默认工具面的主要类别：文件/搜索/编辑/shell、LSP、MCP auth/resources、skills、config、brief、sleep、worktree、plan mode、cron、todo、task、agent、team 和 remote trigger。Plugin tools 与 MCP tools 会在运行时动态追加。
+
 ```text
 /artifacts list [query]
 /artifacts show <id-or-name>
@@ -654,7 +657,8 @@ OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
 - theme/output-style catalog loading：project/user/builtin，TUI 会消费当前 theme/keybindings
 - memory/session 管理
 - task/team/swarm 基础生命周期，包含 split/review-auto/merge-summary/diff/worktree-flow artifacts
+- OpenHarness 风格 kernel tool surface：44 个内置 tools，并支持 plugin/MCP 动态扩展
 - sandbox fallback smoke
 - macOS/Linux/Windows CI 全绿
 
-后续主要是生态厚度工作：更多 tool、更多 provider 真实 E2E、更复杂的 MCP resource 场景、真实 IM gateway adapter，以及更完整的 vim/voice 子系统。
+后续主要是生态厚度工作：更多 provider 真实 E2E、更复杂的 MCP resource 场景、真实 IM gateway adapter，以及更完整的 vim/voice 子系统。
