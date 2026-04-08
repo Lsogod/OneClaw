@@ -23,9 +23,9 @@
   <img src="https://img.shields.io/badge/Providers-5-green" alt="Providers">
 </p>
 
-**OneClaw** 是一个面向编程任务的开放式 Agent Harness。它把模型 provider、query loop、tools、MCP、hooks、memory、session、sandbox、plugin、bridge、tasks 和 team/swarm 控制面拆成可维护的运行时模块。
+**OneClaw** 是一个面向编程任务的开放式 Agent Harness，提供 `one` 命令、React/Ink TUI、Python kernel、MCP、plugin、bridge control plane 和 team/swarm 工作流。
 
-当前仓库是 **OneClaw** 的正式根项目，承载完整的 harness runtime、TUI、bridge、plugin、MCP 和 swarm 工作流。
+它把模型 provider、query loop、tools、hooks、memory、session、sandbox、artifacts、tasks 和 gateway 等能力拆成可维护的运行时模块，适合在本地和自动化环境中运行代码 agent。
 
 ---
 
