@@ -1204,6 +1204,73 @@ describe("Frontend command registry", () => {
     }
   })
 
+  test("plugin marketplace commands manage project and user catalogs", async () => {
+    const originalHome = process.env.ONECLAW_HOME
+    const homeDir = join(tmpdir(), `oneclaw-plugin-market-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const workspace = join(tmpdir(), `oneclaw-plugin-market-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const sourcePlugin = join(tmpdir(), `oneclaw-plugin-market-source-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, "market-plugin")
+    await mkdir(homeDir, { recursive: true })
+    await mkdir(workspace, { recursive: true })
+    await mkdir(sourcePlugin, { recursive: true })
+    await writeFile(join(sourcePlugin, "plugin.json"), JSON.stringify({
+      name: "market-plugin",
+      version: "1.0.0",
+      permissions: ["prompt"],
+    }, null, 2))
+    process.env.ONECLAW_HOME = homeDir
+
+    try {
+      const registry = createFrontendCommandRegistry()
+      let reloadCount = 0
+      const context = {
+        client: createFakeClient({
+          reload: async () => {
+            reloadCount += 1
+            return {
+              provider: "codex-subscription",
+              activeProfile: "codex-subscription",
+            }
+          },
+        }),
+        sessionId: "session_current",
+        cwd: workspace,
+      } as never
+
+      const initProject = registry.lookup("/plugin marketplace init project")
+      const initUser = registry.lookup("/plugin marketplace init user")
+      const add = registry.lookup(`/plugin marketplace add project market-plugin ${sourcePlugin} Local marketplace plugin`)
+      const list = registry.lookup("/plugin marketplace list market")
+      const show = registry.lookup("/plugin marketplace show market-plugin")
+      const install = registry.lookup("/plugin marketplace install market-plugin --trust")
+      const remove = registry.lookup("/plugin marketplace remove project market-plugin")
+
+      const initProjectResult = await initProject?.command.handler(initProject.args, context)
+      const initUserResult = await initUser?.command.handler(initUser.args, context)
+      const addResult = await add?.command.handler(add.args, context)
+      const listResult = await list?.command.handler(list.args, context)
+      const showResult = await show?.command.handler(show.args, context)
+      const installResult = await install?.command.handler(install.args, context)
+      const removeResult = await remove?.command.handler(remove.args, context)
+
+      expect(initProjectResult?.message).toContain("marketplace.json")
+      expect(initUserResult?.message).toContain("marketplace.json")
+      expect(addResult?.message).toContain("market-plugin")
+      expect(listResult?.message).toContain("Local marketplace plugin")
+      expect(showResult?.message).toContain("market-plugin")
+      expect(installResult?.message).toContain('"installed": true')
+      expect(installResult?.message).toContain("trustedManifestHashes")
+      expect(removeResult?.message).toContain('"removed": true')
+      expect(existsSync(join(homeDir, "plugins", "market-plugin", "plugin.json"))).toBe(true)
+      expect(reloadCount).toBe(1)
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ONECLAW_HOME
+      } else {
+        process.env.ONECLAW_HOME = originalHome
+      }
+    }
+  })
+
   test("skills command returns discovered skills", async () => {
     const registry = createFrontendCommandRegistry()
     const lookedUp = registry.lookup("/skills")

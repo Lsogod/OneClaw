@@ -28,6 +28,14 @@ import {
   validatePluginDirectory,
 } from "../plugins/installer.mts"
 import {
+  addPluginMarketplaceEntry,
+  initPluginMarketplace,
+  installPluginFromMarketplace,
+  listPluginMarketplace,
+  removePluginMarketplaceEntry,
+  type PluginMarketplaceScope,
+} from "../plugins/marketplace.mts"
+import {
   addSkill,
   initSkill,
   listManagedSkills,
@@ -3606,6 +3614,58 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           return { message: pretty(await auditPlugin(config, target)) }
         }
         return { message: "Usage: /plugin trust [list|add <name-or-path>|remove <name-or-path-or-hash>|check <name-or-path>]" }
+      }
+      if (action === "marketplace" || action === "market") {
+        const subaction = parts[1] ?? "list"
+        if (subaction === "list") {
+          return { message: pretty(await listPluginMarketplace(config, context.cwd, parts.slice(2).join(" "))) }
+        }
+        if (subaction === "init") {
+          const scope = (parts[2] ?? "project") as PluginMarketplaceScope
+          if (scope !== "project" && scope !== "user") {
+            return { message: "Usage: /plugin marketplace init [project|user]" }
+          }
+          return { message: pretty(await initPluginMarketplace(config, context.cwd, scope)) }
+        }
+        if (subaction === "add") {
+          const scope = (parts[2] ?? "") as PluginMarketplaceScope
+          const name = parts[3]
+          const source = parts[4]
+          if ((scope !== "project" && scope !== "user") || !name || !source) {
+            return { message: "Usage: /plugin marketplace add <project|user> <name> <path-or-source> [description]" }
+          }
+          return {
+            message: pretty(await addPluginMarketplaceEntry(config, context.cwd, scope, {
+              name,
+              source,
+              description: parts.slice(5).join(" ").trim() || undefined,
+            })),
+          }
+        }
+        if (subaction === "remove") {
+          const scope = (parts[2] ?? "") as PluginMarketplaceScope
+          const name = parts[3]
+          if ((scope !== "project" && scope !== "user") || !name) {
+            return { message: "Usage: /plugin marketplace remove <project|user> <name>" }
+          }
+          return { message: pretty(await removePluginMarketplaceEntry(config, context.cwd, scope, name)) }
+        }
+        if (subaction === "show" && parts[2]) {
+          const marketplace = await listPluginMarketplace(config, context.cwd)
+          return {
+            message: pretty(marketplace.plugins.find(entry => entry.name === parts[2]) ?? null),
+          }
+        }
+        if (subaction === "install" && parts[2]) {
+          const result = await installPluginFromMarketplace(config, context.cwd, parts[2], {
+            trust: parts.includes("--trust"),
+          })
+          if (result.installed) {
+            await context.client.reload()
+          }
+          return { message: pretty(result) }
+        }
+        return { message: "Usage: /plugin marketplace [list [query]|init [project|user]|add <project|user> <name> <path-or-source> [description]|remove <project|user> <name>|show <name>|install <name> [--trust]]" }
       }
       if (action === "install") {
         const sourcePath = args.replace(/^install\s+/, "").trim()

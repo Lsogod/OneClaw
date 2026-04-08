@@ -344,6 +344,7 @@ Plugin 支持：
 - module hooks
 - plugin tools
 - install / uninstall / reload / inspect / audit
+- project/user marketplace catalog
 
 示例 plugin 位于：
 
@@ -360,6 +361,7 @@ Skills 与 memory 会进入 prompt assembly，并受 context budget 约束。常
 /plugin hooks <name>
 /plugin audit <name-or-path>
 /plugin trust [list|add <name-or-path>|remove <name-or-path-or-hash>|check <name-or-path>]
+/plugin marketplace [list|init|add|remove|show|install]
 /plugin reload
 /hooks files
 /hooks add command <event> <name> <command>
@@ -382,7 +384,7 @@ Skills 与 memory 会进入 prompt assembly，并受 context budget 约束。常
 /memory search <query>
 ```
 
-`/plugin audit` 会检查 manifest、声明权限、可执行模块、hooks、skills、manifest hash 和安装来源。`/plugin trust` 会记录可信 manifest hash 与来源路径，用于安装前审计和本地插件治理。
+`/plugin audit` 会检查 manifest、声明权限、可执行模块、hooks、skills、manifest hash 和安装来源。`/plugin trust` 会记录可信 manifest hash 与来源路径，用于安装前审计和本地插件治理。`/plugin marketplace` 使用项目级 `.oneclaw/plugins/marketplace.json` 和用户级 `~/.oneclaw/plugins/marketplace.json` 管理可安装插件目录，默认只自动安装本地 source，远程 source 只记录不自动执行。
 
 自定义 command snippets 支持项目级 `.oneclaw/commands/*.md`、用户级 `~/.oneclaw/commands/*.md`、以及 plugin `commands/*.md`。`{{args}}` 会在运行时替换成 `/commands run` 后面的参数。
 
