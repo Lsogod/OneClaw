@@ -421,6 +421,7 @@ bun run sandbox:smoke
 | `/provider` / `/profile` / `/model` | 管理 provider、命名 profile 与模型 |
 | `/theme` / `/output-style` | 管理 TUI/CLI 输出偏好，支持 project/user catalog |
 | `/keybindings` | 查看或持久化快捷键映射 |
+| `/permissions` | 管理 permission mode、writable roots、command allow/deny 与 path rules |
 | `/fast` / `/effort` / `/passes` / `/turns` | 管理运行时速度、推理强度和 query loop 上限 |
 | `/vim` / `/voice` | 持久化前端输入模式 hint 和 voice keyterms |
 | `/continue` | 基于当前 session 继续执行 |

@@ -835,6 +835,57 @@ describe("Frontend command registry", () => {
     expect(result?.message).toContain("Persisted permission mode allow")
   })
 
+  test("permissions command manages roots, command policies, and path rules", async () => {
+    const originalHome = process.env.ONECLAW_HOME
+    const homeDir = join(tmpdir(), `oneclaw-permissions-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const workspace = join(tmpdir(), `oneclaw-permissions-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    process.env.ONECLAW_HOME = homeDir
+    await mkdir(workspace, { recursive: true })
+
+    try {
+      const registry = createFrontendCommandRegistry()
+      const patches: Record<string, unknown>[] = []
+      const context = {
+        client: createFakeClient({
+          updateConfigPatch: async (patch: Record<string, unknown>) => {
+            patches.push(patch)
+            return {
+              path: "/tmp/oneclaw.config.json",
+              state: { permissionMode: "ask" },
+            }
+          },
+        }),
+        sessionId: "session_current",
+        cwd: workspace,
+      } as never
+
+      const rootAdd = registry.lookup("/permissions roots add ./safe")
+      const allowAdd = registry.lookup("/permissions commands allow add git")
+      const denyAdd = registry.lookup("/permissions commands deny add rm")
+      const pathDeny = registry.lookup("/permissions paths deny **/.env")
+
+      const rootResult = await rootAdd?.command.handler(rootAdd.args, context)
+      const allowResult = await allowAdd?.command.handler(allowAdd.args, context)
+      const denyResult = await denyAdd?.command.handler(denyAdd.args, context)
+      const pathResult = await pathDeny?.command.handler(pathDeny.args, context)
+
+      expect(rootResult?.message).toContain(join(workspace, "safe"))
+      expect(allowResult?.message).toContain("git")
+      expect(denyResult?.message).toContain("rm")
+      expect(pathResult?.message).toContain("**/.env")
+      expect(JSON.stringify(patches[0])).toContain(join(workspace, "safe"))
+      expect(JSON.stringify(patches[1])).toContain("\"commandAllowlist\":[\"git\"]")
+      expect(JSON.stringify(patches[2])).toContain("\"deniedCommands\":[\"rm\"]")
+      expect(JSON.stringify(patches[3])).toContain("\"allow\":false")
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ONECLAW_HOME
+      } else {
+        process.env.ONECLAW_HOME = originalHome
+      }
+    }
+  })
+
   test("clear all clears session memory too", async () => {
     const registry = createFrontendCommandRegistry()
     const lookedUp = registry.lookup("/clear all")

@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { basename, join } from "node:path"
+import { basename, join, resolve } from "node:path"
 import { collectProviderAuthStatuses } from "../providers/auth.mts"
 import { TeamRegistry } from "../agents/team-registry.mts"
 import {
@@ -36,6 +36,7 @@ import {
   type SkillScope,
 } from "../skills/manager.mts"
 import { TaskManager } from "../tasks/task-manager.mts"
+import type { PathPermissionRule, PermissionConfig } from "../types.mts"
 import { appendText, ensureDir, expandHome, limitText, readTextIfExists, slugify, writeText } from "../utils.mts"
 
 const ONECLAW_NEXT_VERSION = "0.2.0"
@@ -164,6 +165,40 @@ function getCommandCoordinator(): Coordinator {
 
 function pretty(value: unknown): string {
   return JSON.stringify(value, null, 2)
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))].sort()
+}
+
+function normalizePermissionConfig(config: PermissionConfig): PermissionConfig {
+  return {
+    ...config,
+    writableRoots: uniqueStrings(config.writableRoots ?? []),
+    commandAllowlist: uniqueStrings(config.commandAllowlist ?? []),
+    deniedCommands: uniqueStrings(config.deniedCommands ?? []),
+    pathRules: [...(config.pathRules ?? [])],
+  }
+}
+
+function resolvePermissionRoot(cwd: string, input: string): string {
+  const expanded = expandHome(input)
+  return resolve(cwd, expanded)
+}
+
+async function patchPermissions(
+  context: FrontendCommandContext,
+  updater: (permissions: PermissionConfig) => PermissionConfig,
+): Promise<FrontendCommandResult> {
+  const config = await loadConfig(context.cwd)
+  const permissions = normalizePermissionConfig(updater(normalizePermissionConfig(config.permissions)))
+  const result = await context.client.updateConfigPatch({ permissions })
+  return {
+    message: pretty({
+      path: result.path,
+      permissions,
+    }),
+  }
 }
 
 async function readThemeCatalogFromDir(directory: string, source: "project" | "user"): Promise<Record<string, CatalogEntry>> {
@@ -1820,17 +1855,104 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
 
   registry.register({
     name: "permissions",
-    description: "Show or persist the permission mode",
+    description: "Show or persist permission mode and policy rules",
     handler: async (args, context) => {
-      const value = args.trim()
-      if (!value || value === "show" || value === "current") {
+      const parts = words(args)
+      const action = parts[0] ?? ""
+      const usage = [
+        "Usage:",
+        "/permissions [show|current]",
+        "/permissions <allow|ask|deny>",
+        "/permissions roots [list|add <path>|remove <path>]",
+        "/permissions commands allow [list|add <cmd>|remove <cmd>]",
+        "/permissions commands deny [list|add <pattern>|remove <pattern>]",
+        "/permissions paths [list|allow <pattern>|deny <pattern>|remove <pattern>]",
+      ].join("\n")
+      if (!action || action === "show" || action === "current") {
         return {
           message: pretty(await context.client.context(context.sessionId)),
         }
       }
-      const nextMode = value.startsWith("set ") ? value.slice(4).trim() : value
+      if (action === "roots") {
+        const subcommand = parts[1] ?? "list"
+        if (subcommand === "list") {
+          const config = await loadConfig(context.cwd)
+          return {
+            message: pretty(normalizePermissionConfig(config.permissions).writableRoots),
+          }
+        }
+        if ((subcommand === "add" || subcommand === "remove") && parts[2]) {
+          const target = resolvePermissionRoot(context.cwd, parts.slice(2).join(" "))
+          return patchPermissions(context, permissions => ({
+            ...permissions,
+            writableRoots: subcommand === "add"
+              ? uniqueStrings([...permissions.writableRoots, target])
+              : uniqueStrings(permissions.writableRoots.filter(root => resolve(root) !== resolve(target))),
+          }))
+        }
+        return { message: usage }
+      }
+      if (action === "commands") {
+        const listKind = parts[1]
+        const subcommand = parts[2] ?? "list"
+        const value = parts.slice(3).join(" ").trim()
+        if (listKind !== "allow" && listKind !== "deny") {
+          return { message: usage }
+        }
+        if (subcommand === "list") {
+          const config = await loadConfig(context.cwd)
+          const permissions = normalizePermissionConfig(config.permissions)
+          return {
+            message: pretty(listKind === "allow" ? permissions.commandAllowlist : permissions.deniedCommands ?? []),
+          }
+        }
+        if ((subcommand === "add" || subcommand === "remove") && value) {
+          return patchPermissions(context, permissions => {
+            const key = listKind === "allow" ? "commandAllowlist" : "deniedCommands"
+            const current = permissions[key] ?? []
+            return {
+              ...permissions,
+              [key]: subcommand === "add"
+                ? uniqueStrings([...current, value])
+                : uniqueStrings(current.filter(item => item !== value)),
+            }
+          })
+        }
+        return { message: usage }
+      }
+      if (action === "paths") {
+        const subcommand = parts[1] ?? "list"
+        const pattern = parts.slice(2).join(" ").trim()
+        if (subcommand === "list") {
+          const config = await loadConfig(context.cwd)
+          return {
+            message: pretty(normalizePermissionConfig(config.permissions).pathRules ?? []),
+          }
+        }
+        if ((subcommand === "allow" || subcommand === "deny") && pattern) {
+          const nextRule: PathPermissionRule = {
+            pattern,
+            allow: subcommand === "allow",
+          }
+          return patchPermissions(context, permissions => ({
+            ...permissions,
+            pathRules: [
+              ...(permissions.pathRules ?? []).filter(rule => rule.pattern !== pattern),
+              nextRule,
+            ],
+          }))
+        }
+        if (subcommand === "remove" && pattern) {
+          return patchPermissions(context, permissions => ({
+            ...permissions,
+            pathRules: (permissions.pathRules ?? []).filter(rule => rule.pattern !== pattern),
+          }))
+        }
+        return { message: usage }
+      }
+      const nextMode = action === "set" ? parts.slice(1).join(" ").trim() : action
       if (!VALID_PERMISSION_MODES.has(nextMode)) {
-        return { message: "Usage: /permissions [current] | /permissions <allow|ask|deny>" }
+        return { message: usage }
       }
       const result = await context.client.updateConfigPatch({
         permissions: { mode: nextMode },
