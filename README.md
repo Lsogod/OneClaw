@@ -403,7 +403,8 @@ bun run sandbox:smoke
 | `/fast` / `/effort` / `/passes` / `/turns` | 管理运行时速度、推理强度和 query loop 上限 |
 | `/vim` / `/voice` | 持久化前端输入模式 hint 和 voice keyterms |
 | `/continue` | 基于当前 session 继续执行 |
-| `/tools` | 查看 tool registry |
+| `/tools` / `/tool-search` | 查看或搜索 tool registry |
+| `/cron` | 管理 OpenHarness 风格的本地 cron job registry |
 | `/todo` | 管理当前 session 的 todo 状态 |
 | `/symbols` | 通过 kernel `code_symbols` 索引或搜索代码符号 |
 | `/fetch` | 通过 kernel `web_fetch` 读取 HTTP(S) URL |
@@ -481,6 +482,7 @@ OneClaw 借鉴了 OpenHarness 中最值得保留的 harness 设计：
 - transcript-first TUI
 - command registry
 - tools/MCP/plugin/skills/memory 分层
+- tool discovery 与本地 cron job registry
 - permission、hooks、sandbox、budget 治理
 - session/resume/export/compact
 - bridge、tasks、team/swarm 控制面
@@ -503,6 +505,7 @@ OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
 - 5 个公开 provider workflow
 - MCP dynamic add/remove/reconnect/read/templates
 - plugin lifecycle
+- tool search 与本地 cron registry
 - memory/session 管理
 - task/team/swarm 基础生命周期
 - sandbox fallback smoke

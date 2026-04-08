@@ -130,6 +130,25 @@ def main() -> int:
                 result = kernel.observability_info()
             elif method == "tools":
                 result = kernel.tools_info(bool(params.get("summaryOnly")))
+            elif method == "tool_search":
+                result = kernel.tool_search(
+                    str(params.get("query") or ""),
+                    int(params.get("limit") or 20),
+                )
+            elif method == "cron":
+                result = kernel.cron_info(params.get("name"))
+            elif method == "cron_upsert":
+                result = kernel.cron_upsert(
+                    params["name"],
+                    params["schedule"],
+                    params["command"],
+                    params.get("cwd"),
+                    bool(params.get("enabled", True)),
+                )
+            elif method == "cron_delete":
+                result = kernel.cron_delete(params["name"])
+            elif method == "cron_toggle":
+                result = kernel.cron_toggle(params["name"], bool(params.get("enabled")))
             elif method == "hooks":
                 result = kernel.hooks_info()
             elif method == "plugins":

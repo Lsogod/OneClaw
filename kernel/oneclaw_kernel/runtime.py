@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timedelta, timezone
 import html
 import json
 import os
@@ -55,6 +56,73 @@ def now_iso() -> str:
 
 def random_id(prefix: str = "oc") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
+
+
+def _parse_cron_field(raw: str, minimum: int, maximum: int) -> set[int]:
+    values: set[int] = set()
+    if not raw:
+        raise ValueError("empty cron field")
+    for part in raw.split(","):
+        if not part:
+            raise ValueError("empty cron segment")
+        step = 1
+        base = part
+        if "/" in part:
+            base, step_text = part.split("/", 1)
+            step = int(step_text)
+            if step < 1:
+                raise ValueError("cron step must be >= 1")
+        if base == "*":
+            start, end = minimum, maximum
+        elif "-" in base:
+            start_text, end_text = base.split("-", 1)
+            start, end = int(start_text), int(end_text)
+        else:
+            start = end = int(base)
+        if start < minimum or end > maximum or start > end:
+            raise ValueError("cron value out of range")
+        values.update(range(start, end + 1, step))
+    return values
+
+
+def validate_cron_expression(expression: str) -> bool:
+    try:
+        fields = expression.strip().split()
+        if len(fields) != 5:
+            return False
+        _parse_cron_field(fields[0], 0, 59)
+        _parse_cron_field(fields[1], 0, 23)
+        _parse_cron_field(fields[2], 1, 31)
+        _parse_cron_field(fields[3], 1, 12)
+        weekdays = _parse_cron_field(fields[4], 0, 7)
+        return bool(weekdays)
+    except Exception:
+        return False
+
+
+def next_cron_run(expression: str, base: datetime | None = None) -> str | None:
+    if not validate_cron_expression(expression):
+        return None
+    fields = expression.strip().split()
+    minutes = _parse_cron_field(fields[0], 0, 59)
+    hours = _parse_cron_field(fields[1], 0, 23)
+    days = _parse_cron_field(fields[2], 1, 31)
+    months = _parse_cron_field(fields[3], 1, 12)
+    weekdays = {0 if day == 7 else day for day in _parse_cron_field(fields[4], 0, 7)}
+    cursor = (base or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cursor = cursor.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    for _ in range(527040):
+        cron_weekday = (cursor.weekday() + 1) % 7
+        if (
+            cursor.minute in minutes
+            and cursor.hour in hours
+            and cursor.day in days
+            and cursor.month in months
+            and cron_weekday in weekdays
+        ):
+            return cursor.isoformat().replace("+00:00", "Z")
+        cursor += timedelta(minutes=1)
+    return None
 
 
 def ensure_dir(pathname: str | Path) -> None:
@@ -1293,6 +1361,9 @@ class OneClawKernel:
     def _todo_path(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "todo.json"
 
+    def _cron_path(self) -> Path:
+        return Path(self.config["homeDir"]) / "cron" / "jobs.json"
+
     def _read_todo_items(self, session_id: str) -> list[dict[str, Any]]:
         raw = read_text_if_exists(self._todo_path(session_id)) or "[]"
         try:
@@ -1321,6 +1392,35 @@ class OneClawKernel:
                 "status": str(item.get("status") or "pending"),
             })
         write_text(self._todo_path(session_id), json.dumps(normalized, indent=2))
+
+    def _read_cron_jobs(self) -> list[dict[str, Any]]:
+        raw = read_text_if_exists(self._cron_path()) or "[]"
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        jobs: list[dict[str, Any]] = []
+        for job in parsed:
+            if not isinstance(job, dict):
+                continue
+            jobs.append({
+                "name": str(job.get("name") or ""),
+                "schedule": str(job.get("schedule") or ""),
+                "command": str(job.get("command") or ""),
+                "cwd": str(job.get("cwd") or self.cwd),
+                "enabled": bool(job.get("enabled", True)),
+                "createdAt": str(job.get("createdAt") or now_iso()),
+                "updatedAt": str(job.get("updatedAt") or job.get("createdAt") or now_iso()),
+                "lastRun": job.get("lastRun"),
+                "lastStatus": job.get("lastStatus"),
+                "nextRun": job.get("nextRun") or next_cron_run(str(job.get("schedule") or "")),
+            })
+        return sorted([job for job in jobs if job["name"]], key=lambda item: item["name"])
+
+    def _write_cron_jobs(self, jobs: list[dict[str, Any]]) -> None:
+        write_text(self._cron_path(), json.dumps(sorted(jobs, key=lambda item: item["name"]), indent=2))
 
     def _session_matches_cwd(self, session: dict[str, Any], cwd: str) -> bool:
         resolved_cwd = os.path.realpath(cwd)
@@ -2006,6 +2106,82 @@ class OneClawKernel:
         self._write_todo_items(session_id, items)
         return self.todo_info(session_id)
 
+    def cron_info(self, name: str | None = None) -> dict[str, Any]:
+        jobs = self._read_cron_jobs()
+        if name:
+            jobs = [job for job in jobs if job["name"] == name]
+        enabled = len([job for job in jobs if job.get("enabled")])
+        return {
+            "path": str(self._cron_path()),
+            "count": len(jobs),
+            "enabled": enabled,
+            "disabled": len(jobs) - enabled,
+            "jobs": jobs,
+        }
+
+    def cron_upsert(
+        self,
+        name: str,
+        schedule: str,
+        command: str,
+        cwd: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        normalized_name = name.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", normalized_name):
+            raise RuntimeError("Cron job name must use letters, numbers, dot, dash, or underscore.")
+        normalized_schedule = schedule.strip()
+        if not validate_cron_expression(normalized_schedule):
+            raise RuntimeError("Invalid cron expression. Use 5-field format: minute hour day month weekday.")
+        if not command.strip():
+            raise RuntimeError("Cron command is required.")
+        target_cwd = os.path.realpath(os.path.join(self.cwd, cwd or self.cwd))
+        if not is_inside_roots(target_cwd, self._permission_roots()):
+            raise RuntimeError(f"Cron cwd outside writable roots: {target_cwd}")
+        now = now_iso()
+        jobs = [job for job in self._read_cron_jobs() if job["name"] != normalized_name]
+        existing = next((job for job in self._read_cron_jobs() if job["name"] == normalized_name), None)
+        job = {
+            "name": normalized_name,
+            "schedule": normalized_schedule,
+            "command": command.strip(),
+            "cwd": target_cwd,
+            "enabled": bool(enabled),
+            "createdAt": existing.get("createdAt") if existing else now,
+            "updatedAt": now,
+            "lastRun": existing.get("lastRun") if existing else None,
+            "lastStatus": existing.get("lastStatus") if existing else None,
+            "nextRun": next_cron_run(normalized_schedule),
+        }
+        jobs.append(job)
+        self._write_cron_jobs(jobs)
+        return {"job": job, **self.cron_info()}
+
+    def cron_delete(self, name: str) -> dict[str, Any]:
+        jobs = self._read_cron_jobs()
+        filtered = [job for job in jobs if job["name"] != name]
+        self._write_cron_jobs(filtered)
+        return {
+            "name": name,
+            "deleted": len(filtered) != len(jobs),
+            **self.cron_info(),
+        }
+
+    def cron_toggle(self, name: str, enabled: bool) -> dict[str, Any]:
+        jobs = self._read_cron_jobs()
+        changed = False
+        for job in jobs:
+            if job["name"] == name:
+                job["enabled"] = bool(enabled)
+                job["updatedAt"] = now_iso()
+                job["nextRun"] = next_cron_run(job["schedule"]) if enabled else None
+                changed = True
+                break
+        if not changed:
+            raise RuntimeError(f"Cron job not found: {name}")
+        self._write_cron_jobs(jobs)
+        return {**self.cron_info(name), "name": name, "jobEnabled": bool(enabled)}
+
     def hooks_info(self) -> dict[str, Any]:
         return {
             "hooks": self.hooks.list(),
@@ -2164,6 +2340,28 @@ class OneClawKernel:
             "count": len(tools),
             "bySource": by_source,
             "tools": [] if summary_only else sorted(tools, key=lambda item: (str(item["source"]), item["name"])),
+        }
+
+    def tool_search(self, query: str, limit: int = 20) -> dict[str, Any]:
+        needle = query.strip().lower()
+        bounded_limit = max(1, min(int(limit or 20), 100))
+        if not needle:
+            raise RuntimeError("tool_search query is required.")
+        matches = []
+        for tool in self.tools_info(summary_only=False)["tools"]:
+            haystack = " ".join([
+                str(tool.get("name") or ""),
+                str(tool.get("description") or ""),
+                str(tool.get("source") or ""),
+            ]).lower()
+            if needle in haystack:
+                matches.append(tool)
+                if len(matches) >= bounded_limit:
+                    break
+        return {
+            "query": query,
+            "count": len(matches),
+            "tools": matches,
         }
 
     def mcp_info(self, verbose: bool = False) -> dict[str, Any]:
@@ -2457,6 +2655,61 @@ class OneClawKernel:
                         "maxResults": {"type": "number"},
                         "timeoutMs": {"type": "number"},
                     },
+                },
+            },
+            {
+                "name": "tool_search",
+                "description": "Search available builtin, plugin, and MCP tools by name or description.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "limit": {"type": "number"},
+                    },
+                },
+            },
+            {
+                "name": "cron_list",
+                "description": "List local cron-style jobs registered in OneClaw.",
+                "readOnly": True,
+                "inputSchema": {"type": "object", "properties": {"name": {"type": "string"}}},
+            },
+            {
+                "name": "cron_create",
+                "description": "Create or replace a local cron-style job. This registers metadata; run an external scheduler to execute jobs.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name", "schedule", "command"],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "schedule": {"type": "string"},
+                        "command": {"type": "string"},
+                        "cwd": {"type": "string"},
+                        "enabled": {"type": "boolean"},
+                    },
+                },
+            },
+            {
+                "name": "cron_delete",
+                "description": "Delete a local cron-style job from the OneClaw registry.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {"name": {"type": "string"}},
+                },
+            },
+            {
+                "name": "cron_toggle",
+                "description": "Enable or disable a local cron-style job.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name", "enabled"],
+                    "properties": {"name": {"type": "string"}, "enabled": {"type": "boolean"}},
                 },
             },
             {
@@ -3047,6 +3300,42 @@ class OneClawKernel:
                 }
             except Exception as error:
                 return {"ok": False, "output": str(error)}
+        if name == "tool_search":
+            query = str(input_payload.get("query") or "")
+            if not query.strip():
+                return {"ok": False, "output": "Missing required field: query"}
+            return {
+                "ok": True,
+                "output": json.dumps(self.tool_search(query, int(input_payload.get("limit") or 20)), indent=2),
+            }
+        if name == "cron_list":
+            target_name = input_payload.get("name")
+            return {
+                "ok": True,
+                "output": json.dumps(self.cron_info(target_name if isinstance(target_name, str) else None), indent=2),
+            }
+        if name == "cron_create":
+            try:
+                created = self.cron_upsert(
+                    str(input_payload.get("name") or ""),
+                    str(input_payload.get("schedule") or ""),
+                    str(input_payload.get("command") or ""),
+                    input_payload.get("cwd") if isinstance(input_payload.get("cwd"), str) else None,
+                    bool(input_payload.get("enabled", True)),
+                )
+                return {"ok": True, "output": json.dumps(created, indent=2)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "cron_delete":
+            target_name = str(input_payload.get("name") or "")
+            if not target_name:
+                return {"ok": False, "output": "Missing required field: name"}
+            return {"ok": True, "output": json.dumps(self.cron_delete(target_name), indent=2)}
+        if name == "cron_toggle":
+            target_name = str(input_payload.get("name") or "")
+            if not target_name:
+                return {"ok": False, "output": "Missing required field: name"}
+            return {"ok": True, "output": json.dumps(self.cron_toggle(target_name, bool(input_payload.get("enabled"))), indent=2)}
         if name == "todo_list":
             return {"ok": True, "output": json.dumps(self._read_todo_items(session["id"]), indent=2)}
         if name == "todo_update":

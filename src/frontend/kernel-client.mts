@@ -276,6 +276,32 @@ export class KernelClient {
     return this.request<Record<string, unknown>>("tools", options)
   }
 
+  toolSearch(query: string, options: { limit?: number } = {}) {
+    return this.request<Record<string, unknown>>("tool_search", { query, limit: options.limit ?? 20 })
+  }
+
+  cron(options: { name?: string } = {}) {
+    return this.request<Record<string, unknown>>("cron", options)
+  }
+
+  cronUpsert(payload: {
+    name: string
+    schedule: string
+    command: string
+    cwd?: string
+    enabled?: boolean
+  }) {
+    return this.request<Record<string, unknown>>("cron_upsert", payload)
+  }
+
+  cronDelete(name: string) {
+    return this.request<Record<string, unknown>>("cron_delete", { name })
+  }
+
+  cronToggle(name: string, enabled: boolean) {
+    return this.request<Record<string, unknown>>("cron_toggle", { name, enabled })
+  }
+
   observability() {
     return this.request<Record<string, unknown>>("observability")
   }

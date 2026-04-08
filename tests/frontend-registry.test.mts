@@ -263,6 +263,37 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       bySource: { builtin: 2 },
       tools: [{ name: "read_file", source: "builtin" }],
     }),
+    toolSearch: async (query: string, options?: { limit?: number }) => ({
+      query,
+      count: 1,
+      tools: [{ name: "read_file", source: "builtin", description: `matched ${query}`, limit: options?.limit }],
+    }),
+    cron: async (options?: { name?: string }) => ({
+      path: "/tmp/oneclaw/cron/jobs.json",
+      count: options?.name ? 1 : 2,
+      enabled: 1,
+      disabled: 1,
+      jobs: [{ name: options?.name ?? "daily", schedule: "0 9 * * 1-5", command: "one smoke", enabled: true }],
+    }),
+    cronUpsert: async (payload: Record<string, unknown>) => ({
+      job: payload,
+      count: 1,
+      enabled: payload.enabled === false ? 0 : 1,
+      jobs: [payload],
+    }),
+    cronDelete: async (name: string) => ({
+      name,
+      deleted: true,
+      count: 0,
+      jobs: [],
+    }),
+    cronToggle: async (name: string, enabled: boolean) => ({
+      name,
+      jobEnabled: enabled,
+      enabled: enabled ? 1 : 0,
+      count: 1,
+      jobs: [{ name, enabled }],
+    }),
     webFetch: async (url: string, options?: { maxChars?: number }) => ({
       url,
       status: 200,
@@ -373,6 +404,8 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/fetch")
     expect(helpText).toContain("/search-web")
     expect(helpText).toContain("/todo")
+    expect(helpText).toContain("/tool-search")
+    expect(helpText).toContain("/cron")
     expect(helpText).toContain("/stats")
     expect(helpText).toContain("/observability")
     expect(helpText).toContain("/plan")
@@ -626,9 +659,14 @@ describe("Frontend command registry", () => {
     expect(result?.message).toContain("one auth copilot-login")
   })
 
-  test("tools and mcp commands expose harness platform registries", async () => {
+  test("tools, tool-search, cron, and mcp commands expose harness platform registries", async () => {
     const registry = createFrontendCommandRegistry()
     const tools = registry.lookup("/tools source builtin")
+    const toolSearch = registry.lookup("/tool-search read --limit 3")
+    const cronList = registry.lookup("/cron list")
+    const cronCreate = registry.lookup("/cron create daily \"0 9 * * 1-5\" \"one smoke\" --disabled")
+    const cronDisable = registry.lookup("/cron disable daily")
+    const cronDelete = registry.lookup("/cron delete daily")
     const mcp = registry.lookup("/mcp reconnect fake")
     const mcpAdd = registry.lookup("/mcp add fake python3 server.py")
     const mcpRemove = registry.lookup("/mcp remove fake")
@@ -641,12 +679,22 @@ describe("Frontend command registry", () => {
     } as never
 
     const toolsResult = await tools?.command.handler(tools.args, context)
+    const toolSearchResult = await toolSearch?.command.handler(toolSearch.args, context)
+    const cronListResult = await cronList?.command.handler(cronList.args, context)
+    const cronCreateResult = await cronCreate?.command.handler(cronCreate.args, context)
+    const cronDisableResult = await cronDisable?.command.handler(cronDisable.args, context)
+    const cronDeleteResult = await cronDelete?.command.handler(cronDelete.args, context)
     const mcpResult = await mcp?.command.handler(mcp.args, context)
     const mcpAddResult = await mcpAdd?.command.handler(mcpAdd.args, context)
     const mcpRemoveResult = await mcpRemove?.command.handler(mcpRemove.args, context)
     const mcpTemplatesResult = await mcpTemplates?.command.handler(mcpTemplates.args, context)
 
     expect(toolsResult?.message).toContain("read_file")
+    expect(toolSearchResult?.message).toContain("matched read")
+    expect(cronListResult?.message).toContain("daily")
+    expect(cronCreateResult?.message).toContain("one smoke")
+    expect(cronDisableResult?.message).toContain("\"enabled\": false")
+    expect(cronDeleteResult?.message).toContain("\"deleted\": true")
     expect(mcpResult?.message).toContain("results")
     expect(mcpAddResult?.message).toContain("python3")
     expect(mcpRemoveResult?.message).toContain("removed")

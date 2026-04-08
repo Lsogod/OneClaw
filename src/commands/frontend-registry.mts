@@ -2763,7 +2763,92 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           message: pretty(tools.filter(tool => tool.source === parts[1])),
         }
       }
-      return { message: "Usage: /tools [list|summary|source <builtin|plugin|mcp>]" }
+      if (parts[0] === "search" && parts.slice(1).join(" ").trim()) {
+        return {
+          message: pretty(await context.client.toolSearch(parts.slice(1).join(" ").trim())),
+        }
+      }
+      return { message: "Usage: /tools [list|summary|source <builtin|plugin|mcp>|search <query>]" }
+    },
+  })
+
+  registry.register({
+    name: "tool-search",
+    description: "Search available builtin, plugin, and MCP tools",
+    handler: async (args, context) => {
+      const parts = words(args)
+      let limit = 20
+      const limitValue = takeFlagValue(parts, ["--limit", "-n"])
+      if (limitValue !== null) {
+        const parsed = Number.parseInt(limitValue, 10)
+        if (!Number.isFinite(parsed) || parsed < 1 || parsed > 100) {
+          return { message: "Usage: /tool-search <query> [--limit 1-100]" }
+        }
+        limit = parsed
+      }
+      const query = parts.join(" ").trim()
+      if (!query) {
+        return { message: "Usage: /tool-search <query> [--limit 1-100]" }
+      }
+      return {
+        message: pretty(await context.client.toolSearch(query, { limit })),
+      }
+    },
+  })
+
+  registry.register({
+    name: "cron",
+    description: "Manage local cron-style job registry",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts[0] ?? "list"
+      if (action === "list" || action === "show") {
+        return {
+          message: pretty(await context.client.cron({ name: parts[1] })),
+        }
+      }
+      if (action === "create" || action === "upsert") {
+        const name = parts[1]
+        if (!name || parts.length < 4) {
+          return { message: "Usage: /cron create <name> \"<5-field cron>\" <command> [--cwd <cwd>] [--disabled]" }
+        }
+        let schedule = parts[2]
+        let commandParts = parts.slice(3)
+        if (parts.length >= 8 && !parts[2].includes(" ")) {
+          schedule = parts.slice(2, 7).join(" ")
+          commandParts = parts.slice(7)
+        }
+        const cwd = takeFlagValue(commandParts, ["--cwd"])
+        const disabled = takeFlag(commandParts, "--disabled")
+        const command = commandParts.join(" ").trim()
+        if (!command) {
+          return { message: "Usage: /cron create <name> \"<5-field cron>\" <command> [--cwd <cwd>] [--disabled]" }
+        }
+        return {
+          message: pretty(await context.client.cronUpsert({
+            name,
+            schedule,
+            command,
+            ...(cwd ? { cwd } : {}),
+            enabled: !disabled,
+          })),
+        }
+      }
+      if (action === "delete" || action === "remove") {
+        if (!parts[1]) {
+          return { message: "Usage: /cron delete <name>" }
+        }
+        return { message: pretty(await context.client.cronDelete(parts[1])) }
+      }
+      if (action === "enable" || action === "disable") {
+        if (!parts[1]) {
+          return { message: `Usage: /cron ${action} <name>` }
+        }
+        return { message: pretty(await context.client.cronToggle(parts[1], action === "enable")) }
+      }
+      return {
+        message: "Usage: /cron [list|show <name>|create <name> \"<5-field cron>\" <command>|enable <name>|disable <name>|delete <name>]",
+      }
     },
   })
 

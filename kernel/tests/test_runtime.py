@@ -133,6 +133,24 @@ class KernelRuntimeTests(unittest.TestCase):
                 "name": "code_symbols",
                 "input": {"query": "runOneClaw", "limit": 10},
             }, session)
+            tool_search = kernel._execute_tool({
+                "name": "tool_search",
+                "input": {"query": "cron", "limit": 10},
+            }, session)
+            cron_created = kernel._execute_tool({
+                "name": "cron_create",
+                "input": {
+                    "name": "daily-smoke",
+                    "schedule": "0 9 * * 1-5",
+                    "command": "one smoke",
+                    "cwd": root,
+                    "enabled": True,
+                },
+            }, session)
+            cron_disabled = kernel._execute_tool({
+                "name": "cron_toggle",
+                "input": {"name": "daily-smoke", "enabled": False},
+            }, session)
 
             self.assertTrue(globbed["ok"])
             self.assertIn("README.md", globbed["output"])
@@ -142,6 +160,14 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertEqual(symbols["symbols"][0]["name"], "OneClawApp")
             self.assertTrue(symbol_tool["ok"])
             self.assertIn("runOneClaw", symbol_tool["output"])
+            self.assertTrue(tool_search["ok"])
+            self.assertIn("cron_create", tool_search["output"])
+            self.assertTrue(cron_created["ok"])
+            self.assertIn("daily-smoke", cron_created["output"])
+            self.assertTrue(cron_disabled["ok"])
+            self.assertIn('"enabled": false', cron_disabled["output"])
+            self.assertEqual(kernel.cron_info()["count"], 1)
+            self.assertTrue(kernel.cron_delete("daily-smoke")["deleted"])
             self.assertGreaterEqual(kernel.tools_info()["count"], 1)
             self.assertEqual(kernel.compact_policy(session["id"])["sessionId"], session["id"])
             self.assertEqual(kernel.context_info(session["id"])["session"]["id"], session["id"])
