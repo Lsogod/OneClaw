@@ -38,6 +38,9 @@ type RuntimeStateView = {
   permissionMode?: string
   totalInputTokens?: number
   totalOutputTokens?: number
+  theme?: string
+  outputStyle?: string
+  keybindings?: Record<string, string>
   fastMode?: boolean
   effort?: string
   maxPasses?: number
@@ -119,6 +122,26 @@ type McpSnapshot = {
   resourceTemplates?: Array<Record<string, unknown>>
   tools?: Array<Record<string, unknown>>
   toolCount?: number
+}
+
+type McpPanelEntry = {
+  value: string
+  label: string
+  kind: "status" | "tool" | "resource" | "template"
+  server?: string
+  uri?: string
+  uriTemplate?: string
+}
+
+type UiPresentation = {
+  primaryColor: string
+  mutedColor: string
+  submitKey: string
+  paletteKey: string
+  sessionKey: string
+  profileKey: string
+  mcpKey: string
+  bridgeKey: string
 }
 
 type SseFrame = {
@@ -215,6 +238,57 @@ function truncateLabel(value: string, maxLength = 28): string {
 function basenameSafe(value: string): string {
   const trimmed = value.trim()
   return trimmed ? basename(trimmed) : value
+}
+
+function providerWizardDefaults(kind: string) {
+  const defaults = {
+    "anthropic-compatible": {
+      model: "claude-sonnet-4-6",
+      baseUrl: "https://api.anthropic.com",
+      label: "Anthropic-Compatible API",
+      env: "ONECLAW_API_KEY or ANTHROPIC_API_KEY",
+    },
+    "openai-compatible": {
+      model: "gpt-5.4",
+      baseUrl: "https://api.openai.com/v1",
+      label: "OpenAI-Compatible API",
+      env: "ONECLAW_API_KEY or OPENAI_API_KEY",
+    },
+    "claude-subscription": {
+      model: "claude-sonnet-4-6",
+      baseUrl: "https://api.anthropic.com",
+      label: "Claude Subscription",
+      env: "~/.claude/.credentials.json",
+    },
+    "codex-subscription": {
+      model: "gpt-5.4",
+      baseUrl: "https://chatgpt.com/backend-api",
+      label: "Codex Subscription",
+      env: "~/.codex/auth.json",
+    },
+    "github-copilot": {
+      model: "gpt-5.4",
+      baseUrl: "https://api.githubcopilot.com",
+      label: "GitHub Copilot",
+      env: "one auth copilot-login",
+    },
+  }
+  return defaults[kind] ?? defaults["codex-subscription"]
+}
+
+export function resolveUiPresentation(runtimeState: RuntimeStateView): UiPresentation {
+  const theme = runtimeState.theme ?? "neutral"
+  const keybindings = runtimeState.keybindings ?? {}
+  return {
+    primaryColor: theme === "contrast" ? "white" : theme === "neutral" ? "cyan" : "cyan",
+    mutedColor: theme === "contrast" ? "cyan" : "gray",
+    submitKey: keybindings.submit ?? "enter",
+    paletteKey: keybindings.palette ?? "ctrl+k",
+    sessionKey: keybindings.sessions ?? keybindings.session ?? "ctrl+o",
+    profileKey: keybindings.profiles ?? keybindings.profile ?? "ctrl+t",
+    mcpKey: keybindings.mcp ?? "ctrl+m",
+    bridgeKey: keybindings.bridge ?? "ctrl+b",
+  }
 }
 
 function appendUiEvent(previous: UiEvent[], label: string): UiEvent[] {
@@ -655,6 +729,73 @@ export function buildMcpPanelLines(snapshot: McpSnapshot, mode: McpViewMode): st
     `tools ${tools.length || snapshot.toolCount || 0} · resources ${resources.length} · templates ${resourceTemplates.length}`,
     "ctrl+m cycle · /mcp tools · /mcp resources · /mcp reconnect [server]",
   ]
+}
+
+export function buildMcpPanelEntries(snapshot: McpSnapshot, mode: McpViewMode): McpPanelEntry[] {
+  const statuses = Array.isArray(snapshot.statuses) ? snapshot.statuses : []
+  const resources = Array.isArray(snapshot.resources) ? snapshot.resources : []
+  const resourceTemplates = Array.isArray(snapshot.resourceTemplates) ? snapshot.resourceTemplates : []
+  const tools = Array.isArray(snapshot.tools) ? snapshot.tools : []
+  if (mode === "statuses") {
+    return statuses.map(status => ({
+      kind: "status",
+      value: String(status.name ?? "server"),
+      server: String(status.name ?? ""),
+      label: `${status.name ?? "server"} · ${status.state ?? "unknown"}${status.detail ? ` · ${status.detail}` : ""}`,
+    }))
+  }
+  if (mode === "tools") {
+    return tools.map(tool => ({
+      kind: "tool",
+      value: String(tool.qualifiedName ?? tool.name ?? "tool"),
+      server: typeof tool.server === "string" ? tool.server : undefined,
+      label: `${tool.qualifiedName ?? tool.name ?? "tool"} · ${tool.readOnly ? "read" : "write"}${tool.description ? ` · ${truncateLabel(String(tool.description), 48)}` : ""}`,
+    }))
+  }
+  if (mode === "resources") {
+    return [
+      ...resources.map(resource => ({
+        kind: "resource" as const,
+        value: String(resource.uri ?? ""),
+        server: String(resource.server ?? ""),
+        uri: String(resource.uri ?? ""),
+        label: `${resource.server ?? "server"} · ${truncateLabel(String(resource.uri ?? ""), 68)}`,
+      })),
+      ...resourceTemplates.map(template => ({
+        kind: "template" as const,
+        value: String(template.uriTemplate ?? ""),
+        server: String(template.server ?? ""),
+        uriTemplate: String(template.uriTemplate ?? ""),
+        label: `${template.server ?? "server"} · template · ${truncateLabel(String(template.uriTemplate ?? ""), 56)}`,
+      })),
+    ]
+  }
+  return []
+}
+
+export function buildMcpActionOptions(mode: McpViewMode, selected: McpPanelEntry | null): BridgeActionOption[] {
+  if (!selected || mode === "overview") {
+    return [{ value: "refresh-mcp", label: "Refresh MCP" }]
+  }
+  if (selected.kind === "status") {
+    return [
+      { value: "inspect-mcp", label: "Inspect server" },
+      { value: "reconnect-mcp", label: "Reconnect server" },
+    ]
+  }
+  if (selected.kind === "resource") {
+    return [
+      { value: "inspect-mcp", label: "Inspect resource" },
+      { value: "read-mcp-resource", label: "Read resource" },
+    ]
+  }
+  if (selected.kind === "template") {
+    return [
+      { value: "inspect-mcp", label: "Inspect template" },
+      { value: "read-mcp-template", label: "Fill and read template" },
+    ]
+  }
+  return [{ value: "inspect-mcp", label: "Inspect tool" }]
 }
 
 function nextBridgeViewMode(mode: BridgeViewMode): BridgeViewMode {
@@ -1161,15 +1302,22 @@ function BridgePanel(props: {
 function McpPanel(props: {
   snapshot: McpSnapshot
   mode: McpViewMode
+  selectionIndex: number
 }) {
   const lines = buildMcpPanelLines(props.snapshot, props.mode)
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={1}>
       <Text bold>{props.mode === "overview" ? "MCP" : `MCP ${props.mode}`}</Text>
-      <Text dim>{"Ctrl+M cycle  /mcp read <server> <uri>  /mcp reconnect [server]"}</Text>
+      <Text dim>{"Ctrl+M cycle  [ ] select  . actions  /mcp read-template <server> <template>"}</Text>
       <Text> </Text>
       {lines.map((line, index) => (
-        <Text key={`mcp-panel-${index}`} dim={index > 0 && props.mode === "overview"} wrap="truncate-end">
+        <Text
+          key={`mcp-panel-${index}`}
+          color={index === props.selectionIndex && props.mode !== "overview" ? "cyan" : undefined}
+          bold={index === props.selectionIndex && props.mode !== "overview"}
+          dim={index > 0 && props.mode === "overview"}
+          wrap="truncate-end"
+        >
           {line}
         </Text>
       ))}
@@ -1187,13 +1335,14 @@ function StatusBar(props: {
   bridgeSnapshot: BridgeSnapshot
 }) {
   const stats = resolveStatusBarStats(props.runtimeState, props.usage)
+  const presentation = resolveUiPresentation(props.runtimeState)
   const bridgeSummary = props.bridgeSnapshot.reachable
     ? `bridge: ${props.bridgeSnapshot.sessions.length}s/${props.bridgeSnapshot.tasks.length}t/${props.bridgeSnapshot.teams.length}tm`
     : "bridge: offline"
   return (
     <Box flexDirection="column">
-      <Text dim>{"─".repeat(96)}</Text>
-      <Text dim>
+      <Text color={presentation.mutedColor}>{"─".repeat(96)}</Text>
+      <Text color={presentation.mutedColor}>
         {`provider: ${stats.provider} │ profile: ${stats.profile} │ model: ${stats.model} │ mode: ${stats.permissionMode} │ effort: ${stats.effort}${stats.fastMode ? " fast" : ""}${stats.vimMode ? " vim" : ""}${stats.voiceMode ? " voice" : ""} │ tokens: ${stats.tokensIn}↓ ${stats.tokensOut}↑ │ mcp: ${stats.mcpConnected} │ plugins: ${stats.pluginCount} │ sessions: ${props.sessionCount} │ ${bridgeSummary} │ cost: $${stats.estimatedCostUsd.toFixed(4)}${props.running ? ` │ running ${props.activeRequestId ?? props.selectedSessionId}` : ""}`}
       </Text>
     </Box>
@@ -1238,6 +1387,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
   const [bridgeSelectionIndex, setBridgeSelectionIndex] = useState(0)
   const [mcpSnapshot, setMcpSnapshot] = useState<McpSnapshot>({})
   const [mcpViewMode, setMcpViewMode] = useState<McpViewMode>("overview")
+  const [mcpSelectionIndex, setMcpSelectionIndex] = useState(0)
   const approvalResolverRef = useRef<((allowed: boolean) => void) | null>(null)
   const bridgeViewModeRef = useRef<BridgeViewMode>("overview")
 
@@ -1247,6 +1397,11 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
     () => buildBridgePanelEntries(bridgeSnapshot, bridgeViewMode, selectedSessionId),
     [bridgeSnapshot, bridgeViewMode, selectedSessionId],
   )
+  const mcpEntries = useMemo(
+    () => buildMcpPanelEntries(mcpSnapshot, mcpViewMode),
+    [mcpSnapshot, mcpViewMode],
+  )
+  const presentation = resolveUiPresentation(runtimeState)
 
   useEffect(() => {
     setPickerIndex(0)
@@ -1258,6 +1413,13 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       return Math.min(previous, maxIndex)
     })
   }, [bridgeEntries.length, bridgeViewMode])
+
+  useEffect(() => {
+    setMcpSelectionIndex(previous => {
+      const maxIndex = Math.max(0, mcpEntries.length - 1)
+      return Math.min(previous, maxIndex)
+    })
+  }, [mcpEntries.length, mcpViewMode])
 
   const pushEvent = useEffectEvent((label: string) => {
     const trimmed = label.trim()
@@ -1396,12 +1558,58 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       description: entry.profile?.description ?? entry.name,
       active: Boolean(entry.active),
     }))
+    const setupOptions = [
+      "anthropic-compatible",
+      "openai-compatible",
+      "claude-subscription",
+      "codex-subscription",
+      "github-copilot",
+    ].map(kind => ({
+      value: `setup:${kind}`,
+      label: `Setup ${kind}`,
+      description: "Create profile without storing secrets",
+    }))
     startTransition(() => {
       setSelectIndex(Math.max(0, options.findIndex(option => option.active)))
       const nextModal = {
         title: "Select Provider Profile",
-        options,
+        options: [...options, ...setupOptions],
         onSelect: async value => {
+          if (value.startsWith("setup:")) {
+            const kind = value.slice("setup:".length)
+            const defaults = providerWizardDefaults(kind)
+            openInputModal({
+              title: `Setup ${kind}`,
+              placeholder: "<profile-name> <model> <baseUrl>",
+              submitLabel: "enter save",
+              initialValue: `${kind}-custom ${defaults.model} ${defaults.baseUrl}`,
+              onSubmit: async rawValue => {
+                const [profileName, model, baseUrl] = rawValue.trim().split(/\s+/)
+                if (!profileName || !model || !baseUrl) {
+                  setStatusLine("Provider setup needs: <profile-name> <model> <baseUrl>")
+                  return
+                }
+                const result = await client.profileSave(profileName, {
+                  kind,
+                  model,
+                  baseUrl,
+                  label: defaults.label,
+                  description: `Configured by TUI provider setup wizard for ${kind}.`,
+                }, { activate: true })
+                const diagnostics = await client.providerDiagnostics(kind)
+                startTransition(() => {
+                  setInspectorText(JSON.stringify({
+                    saved: result,
+                    diagnostics,
+                    secretPolicy: `Set ${defaults.env}; no API key was written to config.`,
+                  }, null, 2))
+                  setStatusLine(`Configured ${profileName}; set ${defaults.env}`)
+                })
+                await refreshSnapshot(selectedSessionId)
+              },
+            })
+            return
+          }
           const result = await client.profileUse(value)
           setStatusLine(`Persisted active profile ${result.activeProfile}`)
           await refreshSnapshot(selectedSessionId)
@@ -1450,7 +1658,120 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
 
   const cycleMcpView = useEffectEvent(() => {
     const modes: McpViewMode[] = ["overview", "statuses", "tools", "resources"]
+    setMcpSelectionIndex(0)
     setMcpViewMode(previous => modes[(modes.indexOf(previous) + 1) % modes.length])
+  })
+
+  const moveMcpSelection = useEffectEvent((delta: 1 | -1) => {
+    if (mcpViewMode === "overview" || mcpEntries.length === 0) {
+      return
+    }
+    startTransition(() => {
+      setMcpSelectionIndex(previous => {
+        const maxIndex = mcpEntries.length - 1
+        const next = Math.max(0, Math.min(maxIndex, previous + delta))
+        const selected = mcpEntries[next]
+        if (selected) {
+          setStatusLine(`MCP ${mcpViewMode}: ${selected.value}`)
+        }
+        return next
+      })
+    })
+  })
+
+  const inspectMcpSelection = useEffectEvent(async () => {
+    if (mcpViewMode === "overview" || mcpEntries.length === 0) {
+      return
+    }
+    const selected = mcpEntries[mcpSelectionIndex]
+    if (!selected) {
+      return
+    }
+    if (selected.kind === "resource" && selected.server && selected.uri) {
+      const payload = await clientRef.current?.mcpReadResource(selected.server, selected.uri)
+      startTransition(() => {
+        setInspectorText(JSON.stringify({ selected, payload }, null, 2))
+        setStatusLine(`Read MCP resource ${truncateLabel(selected.uri ?? "", 32)}`)
+      })
+      return
+    }
+    startTransition(() => {
+      setInspectorText(JSON.stringify(selected, null, 2))
+      setStatusLine(`MCP ${selected.kind}: ${selected.value}`)
+    })
+  })
+
+  const openMcpActionPalette = useEffectEvent(() => {
+    const client = clientRef.current
+    const selected = mcpViewMode === "overview" ? null : mcpEntries[mcpSelectionIndex] ?? null
+    const options = buildMcpActionOptions(mcpViewMode, selected)
+    startTransition(() => {
+      setSelectIndex(0)
+      const nextModal = {
+        title: mcpViewMode === "overview" ? "MCP Actions" : `MCP ${mcpViewMode} Actions`,
+        options,
+        onSelect: async value => {
+          if (!client) {
+            return
+          }
+          if (value === "refresh-mcp") {
+            const mcp = await client.mcp({ verbose: true })
+            startTransition(() => {
+              setMcpSnapshot(mcp as McpSnapshot)
+              setStatusLine("MCP snapshot refreshed")
+            })
+            return
+          }
+          if (!selected) {
+            return
+          }
+          if (value === "inspect-mcp") {
+            await inspectMcpSelection()
+            return
+          }
+          if (value === "reconnect-mcp" && selected.server) {
+            const payload = await client.mcpReconnect(selected.server)
+            const mcp = await client.mcp({ verbose: true })
+            startTransition(() => {
+              setInspectorText(JSON.stringify(payload, null, 2))
+              setMcpSnapshot(mcp as McpSnapshot)
+              setStatusLine(`Reconnected MCP ${selected.server}`)
+            })
+            return
+          }
+          if (value === "read-mcp-resource" && selected.server && selected.uri) {
+            const payload = await client.mcpReadResource(selected.server, selected.uri)
+            startTransition(() => {
+              setInspectorText(String(payload.content ?? ""))
+              setStatusLine(`Read MCP resource ${truncateLabel(selected.uri ?? "", 32)}`)
+            })
+            return
+          }
+          if (value === "read-mcp-template" && selected.server && selected.uriTemplate) {
+            openInputModal({
+              title: `Read Template ${selected.server}`,
+              placeholder: "URI with template values filled",
+              submitLabel: "enter read",
+              initialValue: selected.uriTemplate,
+              onSubmit: async rawValue => {
+                const uri = rawValue.trim()
+                if (!uri) {
+                  setStatusLine("MCP template URI cannot be empty")
+                  return
+                }
+                const payload = await client.mcpReadResource(selected.server!, uri)
+                startTransition(() => {
+                  setInspectorText(String(payload.content ?? ""))
+                  setStatusLine(`Read MCP template ${truncateLabel(uri, 32)}`)
+                })
+              },
+            })
+          }
+        },
+      }
+      setSelectModal(nextModal)
+      setModalState({ kind: "select", modal: nextModal })
+    })
   })
 
   const focusBridgeEntry = useEffectEvent((mode: BridgeViewMode, value?: string) => {
@@ -2191,6 +2512,10 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       return
     }
     if (key.return) {
+      if (!inputBuffer.trim() && !paletteOpen && hints.length === 0 && mcpViewMode !== "overview") {
+        void inspectMcpSelection()
+        return
+      }
       if (!inputBuffer.trim() && !paletteOpen && hints.length === 0 && bridgeViewMode !== "overview") {
         void inspectBridgeSelection()
         return
@@ -2227,15 +2552,27 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       return
     }
     if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && input === "[") {
-      moveBridgeSelection(-1)
+      if (mcpViewMode !== "overview") {
+        moveMcpSelection(-1)
+      } else {
+        moveBridgeSelection(-1)
+      }
       return
     }
     if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && input === "]") {
-      moveBridgeSelection(1)
+      if (mcpViewMode !== "overview") {
+        moveMcpSelection(1)
+      } else {
+        moveBridgeSelection(1)
+      }
       return
     }
     if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && input === ".") {
-      openBridgeActionPalette()
+      if (mcpViewMode !== "overview") {
+        openMcpActionPalette()
+      } else {
+        openBridgeActionPalette()
+      }
       return
     }
     if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && (input === "x" || input === "X")) {
@@ -2358,6 +2695,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         <McpPanel
           snapshot={mcpSnapshot}
           mode={mcpViewMode}
+          selectionIndex={mcpSelectionIndex}
         />
       ) : null}
 
@@ -2377,7 +2715,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         </Box>
       ) : modalState ? null : (
         <Box>
-          {running ? <Text color="yellow" bold>{"● "}</Text> : <Text color="cyan" bold>{"> "}</Text>}
+          {running ? <Text color="yellow" bold>{"● "}</Text> : <Text color={presentation.primaryColor} bold>{"> "}</Text>}
           <Text>{inputBuffer}</Text>
           {!running && !inputBuffer ? <Text dim>{"Type a prompt or slash command..."}</Text> : null}
         </Box>
@@ -2386,29 +2724,29 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       {ready && !modalState && !running ? (
         <Box>
           <Text dim>
-            <Text color="cyan">{"enter"}</Text>
+            <Text color={presentation.primaryColor}>{presentation.submitKey}</Text>
             {" submit  "}
-            <Text color="cyan">{"/"}</Text>
+            <Text color={presentation.primaryColor}>{"/"}</Text>
             {" commands  "}
-            <Text color="cyan">{"↑↓"}</Text>
+            <Text color={presentation.primaryColor}>{"↑↓"}</Text>
             {" history  "}
-            <Text color="cyan">{"ctrl+k"}</Text>
+            <Text color={presentation.primaryColor}>{presentation.paletteKey}</Text>
             {" palette  "}
-            <Text color="cyan">{"ctrl+o"}</Text>
+            <Text color={presentation.primaryColor}>{presentation.sessionKey}</Text>
             {" sessions  "}
-            <Text color="cyan">{"ctrl+t"}</Text>
+            <Text color={presentation.primaryColor}>{presentation.profileKey}</Text>
             {" profiles  "}
-            <Text color="cyan">{"ctrl+m"}</Text>
+            <Text color={presentation.primaryColor}>{presentation.mcpKey}</Text>
             {" mcp  "}
-            <Text color="cyan">{"ctrl+b"}</Text>
+            <Text color={presentation.primaryColor}>{presentation.bridgeKey}</Text>
             {" bridge  "}
-            <Text color="cyan">{"[ ]"}</Text>
+            <Text color={presentation.primaryColor}>{"[ ]"}</Text>
             {" pick  "}
-            <Text color="cyan">{"."}</Text>
+            <Text color={presentation.primaryColor}>{"."}</Text>
             {" actions  "}
-            <Text color="cyan">{"enter"}</Text>
+            <Text color={presentation.primaryColor}>{presentation.submitKey}</Text>
             {" inspect  "}
-            <Text color="cyan">{"x/e/m/r"}</Text>
+            <Text color={presentation.primaryColor}>{"x/e/m/r"}</Text>
             {" actions"}
           </Text>
         </Box>

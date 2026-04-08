@@ -742,13 +742,38 @@ describe("Frontend command registry", () => {
     expect(deleted).toEqual(["local-openai"])
   })
 
-  test("provider setup command returns auth guidance for target providers", async () => {
+  test("provider setup command returns auth guidance and setup-wizard writes non-secret profile fields", async () => {
     const registry = createFrontendCommandRegistry()
     const lookedUp = registry.lookup("/provider setup github-copilot")
     const planLookup = registry.lookup("/provider setup-plan github-copilot")
+    const wizardLookup = registry.lookup("/provider setup-wizard openai-compatible --name local-openai --model gpt-local --base-url http://127.0.0.1:8000/v1 --label \"Local OpenAI\"")
+    const saved: Array<{ name: string; profile: Record<string, unknown>; activate?: boolean }> = []
+    const diagnostics: Array<string | undefined> = []
 
     const context = {
       client: createFakeClient({
+        profileSave: async (name: string, profile: Record<string, unknown>, options?: { activate?: boolean }) => {
+          saved.push({ name, profile, activate: options?.activate })
+          return {
+            name,
+            profile,
+            activeProfile: options?.activate ? name : "codex-subscription",
+            path: "/tmp/oneclaw.config.json",
+          }
+        },
+        providerDiagnostics: async (target?: string) => {
+          diagnostics.push(target)
+          return {
+            target: target ?? "codex-subscription",
+            configured: true,
+            provider: {
+              kind: target ?? "codex-subscription",
+              model: "gpt-5.4",
+            },
+            checks: [],
+            repair: [],
+          }
+        },
         state: async () => ({
           provider: "codex-subscription",
           activeProfile: "codex-subscription",
@@ -760,11 +785,26 @@ describe("Frontend command registry", () => {
 
     const result = await lookedUp?.command.handler(lookedUp.args, context)
     const planResult = await planLookup?.command.handler(planLookup.args, context)
+    const wizardResult = await wizardLookup?.command.handler(wizardLookup.args, context)
 
     expect(result?.message).toContain("github-copilot")
     expect(result?.message).toContain("one auth copilot-login")
     expect(planResult?.message).toContain("Copilot device flow")
     expect(planResult?.message).toContain("/provider test")
+    expect(wizardResult?.message).toContain("OPENAI_API_KEY")
+    expect((wizardResult?.message ?? "").includes("apiKey")).toBe(false)
+    expect(saved).toEqual([{
+      name: "local-openai",
+      profile: {
+        kind: "openai-compatible",
+        model: "gpt-local",
+        label: "Local OpenAI",
+        baseUrl: "http://127.0.0.1:8000/v1",
+        description: "Configured by provider setup wizard for openai-compatible.",
+      },
+      activate: true,
+    }])
+    expect(diagnostics).toContain("openai-compatible")
   })
 
   test("tools, tool-search, cron, and mcp commands expose harness platform registries", async () => {
@@ -781,6 +821,8 @@ describe("Frontend command registry", () => {
     const mcpAuth = registry.lookup("/mcp auth fake bearer secret-token --key TOKEN")
     const mcpTemplates = registry.lookup("/mcp templates")
     const mcpCapabilities = registry.lookup("/mcp capabilities")
+    const mcpBrowse = registry.lookup("/mcp browse fake")
+    const mcpReadTemplate = registry.lookup("/mcp read-template fake file://{path} path=README.md")
 
     const context = {
       client: createFakeClient(),
@@ -800,6 +842,8 @@ describe("Frontend command registry", () => {
     const mcpAuthResult = await mcpAuth?.command.handler(mcpAuth.args, context)
     const mcpTemplatesResult = await mcpTemplates?.command.handler(mcpTemplates.args, context)
     const mcpCapabilitiesResult = await mcpCapabilities?.command.handler(mcpCapabilities.args, context)
+    const mcpBrowseResult = await mcpBrowse?.command.handler(mcpBrowse.args, context)
+    const mcpReadTemplateResult = await mcpReadTemplate?.command.handler(mcpReadTemplate.args, context)
 
     expect(toolsResult?.message).toContain("read_file")
     expect(toolSearchResult?.message).toContain("matched read")
@@ -815,6 +859,8 @@ describe("Frontend command registry", () => {
     expect(mcpTemplatesResult?.message).toContain("file://{path}")
     expect(mcpCapabilitiesResult?.message).toContain("serverCount")
     expect(mcpCapabilitiesResult?.message).toContain("fake")
+    expect(mcpBrowseResult?.message).toContain("resourceTemplates")
+    expect(mcpReadTemplateResult?.message).toContain("resource content")
   })
 
   test("observability command exposes trace and failure summaries", async () => {
@@ -1210,14 +1256,26 @@ describe("Frontend command registry", () => {
     const homeDir = join(tmpdir(), `oneclaw-plugin-market-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     const workspace = join(tmpdir(), `oneclaw-plugin-market-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     const sourcePlugin = join(tmpdir(), `oneclaw-plugin-market-source-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, "market-plugin")
+    const remotePlugin = join(tmpdir(), `oneclaw-plugin-market-remote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     await mkdir(homeDir, { recursive: true })
     await mkdir(workspace, { recursive: true })
     await mkdir(sourcePlugin, { recursive: true })
+    await mkdir(remotePlugin, { recursive: true })
     await writeFile(join(sourcePlugin, "plugin.json"), JSON.stringify({
       name: "market-plugin",
       version: "1.0.0",
       permissions: ["prompt"],
     }, null, 2))
+    await writeFile(join(remotePlugin, "plugin.json"), JSON.stringify({
+      name: "remote-plugin",
+      version: "2.0.0",
+      permissions: ["prompt"],
+    }, null, 2))
+    spawnSync("git", ["init"], { cwd: remotePlugin, encoding: "utf8" })
+    spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: remotePlugin, encoding: "utf8" })
+    spawnSync("git", ["config", "user.name", "OneClaw Test"], { cwd: remotePlugin, encoding: "utf8" })
+    spawnSync("git", ["add", "plugin.json"], { cwd: remotePlugin, encoding: "utf8" })
+    spawnSync("git", ["commit", "-m", "init remote plugin"], { cwd: remotePlugin, encoding: "utf8" })
     process.env.ONECLAW_HOME = homeDir
 
     try {
@@ -1240,29 +1298,44 @@ describe("Frontend command registry", () => {
       const initProject = registry.lookup("/plugin marketplace init project")
       const initUser = registry.lookup("/plugin marketplace init user")
       const add = registry.lookup(`/plugin marketplace add project market-plugin ${sourcePlugin} Local marketplace plugin`)
+      const addRemote = registry.lookup(`/plugin marketplace add user remote-plugin git+file://${remotePlugin} Remote marketplace plugin`)
       const list = registry.lookup("/plugin marketplace list market")
       const show = registry.lookup("/plugin marketplace show market-plugin")
+      const dryRun = registry.lookup("/plugin marketplace install market-plugin --dry-run")
       const install = registry.lookup("/plugin marketplace install market-plugin --trust")
+      const installRemote = registry.lookup("/plugin marketplace install remote-plugin --trust")
       const remove = registry.lookup("/plugin marketplace remove project market-plugin")
 
       const initProjectResult = await initProject?.command.handler(initProject.args, context)
       const initUserResult = await initUser?.command.handler(initUser.args, context)
       const addResult = await add?.command.handler(add.args, context)
+      const addRemoteResult = await addRemote?.command.handler(addRemote.args, context)
       const listResult = await list?.command.handler(list.args, context)
       const showResult = await show?.command.handler(show.args, context)
+      const dryRunResult = await dryRun?.command.handler(dryRun.args, context)
       const installResult = await install?.command.handler(install.args, context)
+      const installRemoteResult = await installRemote?.command.handler(installRemote.args, context)
       const removeResult = await remove?.command.handler(remove.args, context)
 
       expect(initProjectResult?.message).toContain("marketplace.json")
       expect(initUserResult?.message).toContain("marketplace.json")
       expect(addResult?.message).toContain("market-plugin")
+      expect(addRemoteResult?.message).toContain("remote-plugin")
       expect(listResult?.message).toContain("Local marketplace plugin")
       expect(showResult?.message).toContain("market-plugin")
+      expect(dryRunResult?.message).toContain('"dryRun": true')
       expect(installResult?.message).toContain('"installed": true')
       expect(installResult?.message).toContain("trustedManifestHashes")
+      expect(installRemoteResult?.message).toContain('"remote": true')
+      expect(installRemoteResult?.message).toContain("marketplace-lock.json")
       expect(removeResult?.message).toContain('"removed": true')
       expect(existsSync(join(homeDir, "plugins", "market-plugin", "plugin.json"))).toBe(true)
-      expect(reloadCount).toBe(1)
+      expect(existsSync(join(homeDir, "plugins", "remote-plugin", "plugin.json"))).toBe(true)
+      expect(existsSync(join(homeDir, "plugins", "sources", "remote-plugin", "plugin.json"))).toBe(true)
+      const lock = await readFile(join(homeDir, "plugins", "marketplace-lock.json"), "utf8")
+      expect(lock).toContain("remote-plugin")
+      expect(lock).toContain("manifestSha256")
+      expect(reloadCount).toBe(2)
     } finally {
       if (originalHome === undefined) {
         delete process.env.ONECLAW_HOME
@@ -1540,10 +1613,12 @@ describe("Frontend command registry", () => {
         cwd: root,
       } as never)
 
-      const parsed = JSON.parse(result?.message ?? "{}") as { path?: string }
+      const parsed = JSON.parse(result?.message ?? "{}") as { path?: string; artifact?: Record<string, unknown> }
       expect(parsed.path).toContain("diagnostics")
       expect(existsSync(parsed.path ?? "")).toBe(true)
       expect(await readFile(parsed.path ?? "", "utf8")).toContain("session_current")
+      expect(result?.message).toContain("artifact_")
+      expect(JSON.stringify(parsed.artifact ?? {})).toContain("diagnostic")
     } finally {
       if (originalHome === undefined) {
         delete process.env.ONECLAW_HOME
@@ -1567,11 +1642,19 @@ describe("Frontend command registry", () => {
     const fetchLookup = registry.lookup("/fetch https://example.test/page 1200 --artifact")
     const symbolsLookup = registry.lookup("/symbols OneClaw --path src --limit 5 --artifact")
     const searchLookup = registry.lookup("/search-web OneClaw --limit 2 --artifact")
+    const lspLookup = registry.lookup("/lsp workspace OneClaw --limit 5 --artifact")
+    const toolSearchLookup = registry.lookup("/tool-search read --artifact")
+    const todoLookup = registry.lookup("/todo --artifact")
+    const sessionExportLookup = registry.lookup("/sessions export session_new markdown --artifact")
 
     const createResult = await createLookup?.command.handler(createLookup.args, context)
     const fetchResult = await fetchLookup?.command.handler(fetchLookup.args, context)
     const symbolsResult = await symbolsLookup?.command.handler(symbolsLookup.args, context)
     const searchResult = await searchLookup?.command.handler(searchLookup.args, context)
+    const lspResult = await lspLookup?.command.handler(lspLookup.args, context)
+    const toolSearchResult = await toolSearchLookup?.command.handler(toolSearchLookup.args, context)
+    const todoResult = await todoLookup?.command.handler(todoLookup.args, context)
+    const sessionExportResult = await sessionExportLookup?.command.handler(sessionExportLookup.args, context)
     const createPayload = JSON.parse(createResult?.message ?? "{}") as {
       record?: { id?: string; path?: string }
     }
@@ -1590,6 +1673,10 @@ describe("Frontend command registry", () => {
     expect(fetchResult?.message).toContain("artifact:")
     expect(symbolsResult?.message).toContain("artifact_")
     expect(searchResult?.message).toContain("artifact_")
+    expect(lspResult?.message).toContain("artifact_")
+    expect(toolSearchResult?.message).toContain("artifact_")
+    expect(todoResult?.message).toContain("artifact_")
+    expect(sessionExportResult?.message).toContain("artifact_")
     expect(listResult?.message).toContain("fetch-https")
     expect(showResult?.message).toContain("Notes")
     expect(readResult?.message).toContain("Artifact body")
@@ -2312,6 +2399,7 @@ describe("Frontend command registry", () => {
     await mkdir(workspace, { recursive: true })
     const created: Array<Record<string, unknown> | undefined> = []
     const prompts: string[] = []
+    const commandPrompts: string[] = []
     const context = {
       client: createFakeClient({
         createSession: async (_cwd: string, metadata?: Record<string, unknown>) => {
@@ -2333,6 +2421,39 @@ describe("Frontend command registry", () => {
             }),
           }
         },
+        runPrompt: async (prompt: string) => {
+          commandPrompts.push(prompt)
+          if (prompt.includes("Split this swarm goal")) {
+            return {
+              sessionId: "session_current",
+              text: "- inspect risk\n- patch bugs",
+              iterations: 1,
+              stopReason: "end_turn",
+            }
+          }
+          if (prompt.includes("Review this swarm result")) {
+            return {
+              sessionId: "session_current",
+              text: "auto review: no blockers",
+              iterations: 1,
+              stopReason: "end_turn",
+            }
+          }
+          if (prompt.includes("Create a concise merge summary")) {
+            return {
+              sessionId: "session_current",
+              text: "merge summary: ready",
+              iterations: 1,
+              stopReason: "end_turn",
+            }
+          }
+          return {
+            sessionId: "session_current",
+            text: `ran: ${prompt}`,
+            iterations: 1,
+            stopReason: "end_turn",
+          }
+        },
       }),
       sessionId: "session_current",
       cwd: workspace,
@@ -2340,33 +2461,50 @@ describe("Frontend command registry", () => {
 
     const createLookup = registry.lookup(`/swarm create ${name} ship the release`)
     const planLookup = registry.lookup(`/swarm plan ${name} inspect risk :: patch bugs`)
+    const splitLookup = registry.lookup(`/swarm split ${name}`)
     const runLookup = registry.lookup(`/swarm run ${name}`)
     const statusLookup = registry.lookup(`/swarm status ${name}`)
     const reviewLookup = registry.lookup(`/swarm review ${name} approved ready`)
+    const reviewAutoLookup = registry.lookup(`/swarm review ${name} auto`)
     const mergeLookup = registry.lookup(`/swarm merge ${name} ready reviewed`)
+    const mergeSummaryLookup = registry.lookup(`/swarm merge ${name} summary`)
+    const diffLookup = registry.lookup(`/swarm diff ${name}`)
     const artifactLookup = registry.lookup(`/swarm artifact ${name}`)
     const artifactsLookup = registry.lookup("/artifacts list swarm")
 
     const createResult = await createLookup?.command.handler(createLookup.args, context)
     const planResult = await planLookup?.command.handler(planLookup.args, context)
+    const splitResult = await splitLookup?.command.handler(splitLookup.args, context)
     const runResult = await runLookup?.command.handler(runLookup.args, context)
     const statusResult = await statusLookup?.command.handler(statusLookup.args, context)
     const reviewResult = await reviewLookup?.command.handler(reviewLookup.args, context)
+    const reviewAutoResult = await reviewAutoLookup?.command.handler(reviewAutoLookup.args, context)
     const mergeResult = await mergeLookup?.command.handler(mergeLookup.args, context)
+    const mergeSummaryResult = await mergeSummaryLookup?.command.handler(mergeSummaryLookup.args, context)
+    const diffResult = await diffLookup?.command.handler(diffLookup.args, context)
     const artifactResult = await artifactLookup?.command.handler(artifactLookup.args, context)
     const artifactsResult = await artifactsLookup?.command.handler(artifactsLookup.args, context)
 
     expect(createResult?.message).toContain(name)
     expect(planResult?.message).toContain("inspect risk")
+    expect(splitResult?.message).toContain("rawPlan")
     expect([...prompts].sort()).toEqual(["inspect risk", "patch bugs"].sort())
+    expect(commandPrompts.some(prompt => prompt.includes("Split this swarm goal"))).toBe(true)
+    expect(commandPrompts.some(prompt => prompt.includes("Review this swarm result"))).toBe(true)
+    expect(commandPrompts.some(prompt => prompt.includes("Create a concise merge summary"))).toBe(true)
     expect(created.every(item => item?.via === "swarm-run")).toBe(true)
     expect(created.every(item => item?.team === name)).toBe(true)
     expect(runResult?.message).toContain("\"status\": \"completed\"")
     expect(statusResult?.message).toContain("\"tasks\"")
     expect(reviewResult?.message).toContain("\"approved\"")
     expect(reviewResult?.message).toContain("swarm-review")
+    expect(reviewAutoResult?.message).toContain("auto review")
+    expect(reviewAutoResult?.message).toContain("swarm-review-auto")
     expect(mergeResult?.message).toContain("\"ready\"")
     expect(mergeResult?.message).toContain("swarm-merge")
+    expect(mergeSummaryResult?.message).toContain("merge summary")
+    expect(mergeSummaryResult?.message).toContain("swarm-merge-summary")
+    expect(diffResult?.message).toContain("swarm-diff")
     expect(artifactResult?.message).toContain("swarm-status")
     expect(artifactsResult?.message).toContain(name)
   })

@@ -6,8 +6,11 @@ import {
   buildBridgeSummaryLines,
   buildBridgePanelLines,
   buildInfoPanelLines,
+  buildMcpActionOptions,
+  buildMcpPanelEntries,
   buildMcpPanelLines,
   extractSseFrames,
+  resolveUiPresentation,
   resolveStatusBarStats,
 } from "../src/tui/react-app.tsx"
 
@@ -212,10 +215,50 @@ describe("TUI view model", () => {
       statuses: [{ name: "fs", state: "connected" }],
       tools: [{ qualifiedName: "mcp__fs__read", readOnly: true, description: "Read files" }],
       resources: [{ server: "fs", uri: "file://README.md" }],
+      resourceTemplates: [{ server: "fs", uriTemplate: "file://{path}" }],
     }
 
     expect(buildMcpPanelLines(snapshot, "overview").join("\n")).toContain("servers 1")
     expect(buildMcpPanelLines(snapshot, "tools").join("\n")).toContain("mcp__fs__read")
     expect(buildMcpPanelLines(snapshot, "resources").join("\n")).toContain("file://README.md")
+    expect(buildMcpPanelLines(snapshot, "resources").join("\n")).toContain("template")
+    expect(buildMcpPanelEntries(snapshot, "resources")).toEqual([
+      { kind: "resource", server: "fs", uri: "file://README.md", value: "file://README.md", label: "fs · file://README.md" },
+      { kind: "template", server: "fs", uriTemplate: "file://{path}", value: "file://{path}", label: "fs · template · file://{path}" },
+    ])
+    expect(buildMcpActionOptions("resources", { kind: "template", server: "fs", value: "file://{path}", label: "fs" }).map(option => option.value)).toEqual([
+      "inspect-mcp",
+      "read-mcp-template",
+    ])
+    expect(buildMcpActionOptions("statuses", { kind: "status", server: "fs", value: "fs", label: "fs" }).map(option => option.value)).toEqual([
+      "inspect-mcp",
+      "reconnect-mcp",
+    ])
+  })
+
+  test("TUI presentation consumes runtime theme and keybinding state with fallbacks", () => {
+    expect(resolveUiPresentation({
+      provider: "codex-subscription",
+      activeProfile: "codex-subscription",
+      theme: "contrast",
+      keybindings: {
+        submit: "ctrl+j",
+        palette: "ctrl+k",
+        sessions: "ctrl+o",
+        profile: "ctrl+t",
+        mcp: "ctrl+m",
+        bridge: "ctrl+b",
+      },
+    })).toEqual({
+      primaryColor: "white",
+      mutedColor: "cyan",
+      submitKey: "ctrl+j",
+      paletteKey: "ctrl+k",
+      sessionKey: "ctrl+o",
+      profileKey: "ctrl+t",
+      mcpKey: "ctrl+m",
+      bridgeKey: "ctrl+b",
+    })
+    expect(resolveUiPresentation({ provider: "codex-subscription", activeProfile: "codex-subscription" }).submitKey).toBe("enter")
   })
 })

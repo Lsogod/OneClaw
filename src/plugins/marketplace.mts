@@ -1,7 +1,8 @@
-import { mkdir } from "node:fs/promises"
+import { spawnSync } from "node:child_process"
+import { mkdir, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import type { OneClawConfig } from "../types.mts"
-import { readJsonIfExists, writeJson } from "../utils.mts"
+import { readJsonIfExists, slugify, writeJson } from "../utils.mts"
 import { auditPlugin, installPluginFromPath, trustPlugin } from "./installer.mts"
 
 export type PluginMarketplaceScope = "project" | "user"
@@ -22,10 +23,41 @@ type PluginMarketplaceFile = {
   plugins?: PluginMarketplaceEntry[]
 }
 
+type PluginMarketplaceLockRecord = {
+  name: string
+  source: string
+  resolvedSource: string
+  version?: string
+  manifestSha256: string
+  installedAt: string
+  trusted: boolean
+}
+
+type PluginMarketplaceLockFile = {
+  version: 1
+  plugins?: Record<string, PluginMarketplaceLockRecord>
+}
+
 function marketplacePath(config: OneClawConfig, cwd: string, scope: PluginMarketplaceScope): string {
   return scope === "project"
     ? join(cwd, ".oneclaw", "plugins", "marketplace.json")
     : join(config.homeDir, "plugins", "marketplace.json")
+}
+
+function marketplaceLockPath(config: OneClawConfig): string {
+  return join(config.homeDir, "plugins", "marketplace-lock.json")
+}
+
+function marketplaceSourceDir(config: OneClawConfig, name: string): string {
+  return join(config.homeDir, "plugins", "sources", slugify(name))
+}
+
+function isRemoteSource(source: string): boolean {
+  return /^(https?:|git\+|ssh:|git@)/i.test(source)
+}
+
+function cloneSource(source: string): string {
+  return source.replace(/^git\+/i, "")
 }
 
 function normalizeEntry(entry: PluginMarketplaceEntry, scope: PluginMarketplaceScope, path: string): PluginMarketplaceEntry {
@@ -177,7 +209,7 @@ export async function installPluginFromMarketplace(
   config: OneClawConfig,
   cwd: string,
   name: string,
-  options: { trust?: boolean } = {},
+  options: { trust?: boolean; dryRun?: boolean } = {},
 ): Promise<Record<string, unknown>> {
   const entry = await findPluginMarketplaceEntry(config, cwd, name)
   if (!entry) {
@@ -186,21 +218,76 @@ export async function installPluginFromMarketplace(
       reason: `Plugin marketplace entry not found: ${name}`,
     }
   }
-  if (/^(https?:|git\+|ssh:)/i.test(entry.source)) {
+  const remote = isRemoteSource(entry.source)
+  const resolvedSource = remote ? marketplaceSourceDir(config, entry.name) : entry.source
+  if (options.dryRun) {
     return {
       installed: false,
-      reason: "Remote marketplace sources are recorded but not installed automatically. Clone or vendor the plugin locally, then install from a local path.",
+      dryRun: true,
       entry,
+      remote,
+      resolvedSource,
+      steps: [
+        ...(remote ? [`clone ${entry.source} -> ${resolvedSource}`] : []),
+        `audit ${resolvedSource}`,
+        `install ${entry.name}`,
+        ...(options.trust ? [`trust ${entry.name}`] : []),
+      ],
     }
   }
-  const audit = await auditPlugin(config, entry.source)
-  const trust = options.trust ? await trustPlugin(config, entry.source) : undefined
-  const installed = await installPluginFromPath(config, entry.source)
+  if (remote) {
+    await rm(resolvedSource, { recursive: true, force: true })
+    await mkdir(dirname(resolvedSource), { recursive: true })
+    const clone = spawnSync("git", [
+      "clone",
+      "--depth",
+      "1",
+      ...(entry.version ? ["--branch", entry.version] : []),
+      cloneSource(entry.source),
+      resolvedSource,
+    ], {
+      encoding: "utf8",
+    })
+    if (clone.status !== 0) {
+      return {
+        installed: false,
+        entry,
+        remote,
+        resolvedSource,
+        error: (clone.stderr || clone.stdout || "git clone failed").trim(),
+      }
+    }
+  }
+  const audit = await auditPlugin(config, resolvedSource)
+  const trust = options.trust ? await trustPlugin(config, resolvedSource) : undefined
+  const installed = await installPluginFromPath(config, resolvedSource)
+  const lockPath = marketplaceLockPath(config)
+  const lock = await readJsonIfExists<PluginMarketplaceLockFile>(lockPath) ?? {
+    version: 1,
+    plugins: {},
+  }
+  lock.plugins = {
+    ...(lock.plugins ?? {}),
+    [entry.name]: {
+      name: entry.name,
+      source: entry.source,
+      resolvedSource,
+      version: entry.version ?? audit.version,
+      manifestSha256: audit.manifestSha256,
+      installedAt: new Date().toISOString(),
+      trusted: Boolean(options.trust),
+    },
+  }
+  await writeJson(lockPath, lock)
   return {
     installed: true,
     entry,
+    remote,
+    resolvedSource,
     audit,
     trust,
+    lockPath,
+    lock: lock.plugins[entry.name],
     result: installed,
   }
 }

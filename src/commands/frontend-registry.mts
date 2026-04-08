@@ -759,10 +759,24 @@ async function writeDiagnosticBundle(context: FrontendCommandContext): Promise<R
     observability: await context.client.observability(),
     tools: await context.client.tools({ summaryOnly: true }),
   }
-  await writeText(path, `${JSON.stringify(payload, null, 2)}\n`)
+  const content = `${JSON.stringify(payload, null, 2)}\n`
+  await writeText(path, content)
+  const artifact = await createArtifact(context.cwd, {
+    kind: "diagnostic-bundle",
+    name: `diagnostic-${context.sessionId}`,
+    source: "doctor-bundle",
+    contentType: "application/json",
+    extension: "json",
+    content,
+    metadata: {
+      sessionId: context.sessionId,
+      diagnosticsPath: path,
+    },
+  })
   return {
     path,
-    bytes: JSON.stringify(payload).length,
+    bytes: content.length,
+    artifact: artifact.record,
   }
 }
 
@@ -902,6 +916,105 @@ async function providerSetupPlan(context: FrontendCommandContext, target?: strin
     ],
     repair: Array.isArray(diagnostics.repair) ? diagnostics.repair : [],
     diagnostics,
+  }
+}
+
+type ProviderWizardDefaults = {
+  model: string
+  baseUrl: string
+  label: string
+  env: string[]
+  notes: string[]
+}
+
+function providerWizardDefaults(kind: string): ProviderWizardDefaults {
+  const defaults: Record<string, ProviderWizardDefaults> = {
+    "anthropic-compatible": {
+      model: "claude-sonnet-4-6",
+      baseUrl: "https://api.anthropic.com",
+      label: "Anthropic-Compatible API",
+      env: ["ONECLAW_API_KEY", "ANTHROPIC_API_KEY"],
+      notes: ["API key is not written to OneClaw config."],
+    },
+    "openai-compatible": {
+      model: "gpt-5.4",
+      baseUrl: "https://api.openai.com/v1",
+      label: "OpenAI-Compatible API",
+      env: ["ONECLAW_API_KEY", "OPENAI_API_KEY"],
+      notes: ["Use ONECLAW_BASE_URL or profile baseUrl for OpenRouter/local gateways."],
+    },
+    "claude-subscription": {
+      model: "claude-sonnet-4-6",
+      baseUrl: "https://api.anthropic.com",
+      label: "Claude Subscription",
+      env: [],
+      notes: ["Requires ~/.claude/.credentials.json from Claude CLI login."],
+    },
+    "codex-subscription": {
+      model: "gpt-5.4",
+      baseUrl: "https://chatgpt.com/backend-api",
+      label: "Codex Subscription",
+      env: [],
+      notes: ["Requires ~/.codex/auth.json from Codex login."],
+    },
+    "github-copilot": {
+      model: "gpt-5.4",
+      baseUrl: "https://api.githubcopilot.com",
+      label: "GitHub Copilot",
+      env: [],
+      notes: ["Run `one auth copilot-login` to complete the device flow."],
+    },
+  }
+  return defaults[kind] ?? defaults["codex-subscription"]
+}
+
+async function providerSetupWizardSummary(
+  context: FrontendCommandContext,
+  target?: string,
+  options: {
+    profileName?: string
+    model?: string
+    baseUrl?: string
+    label?: string
+    activate?: boolean
+  } = {},
+): Promise<Record<string, unknown>> {
+  const state = await context.client.state()
+  const kind = target || extractString(state, "provider", "codex-subscription")
+  if (!VALID_PUBLIC_PROVIDER_KINDS.has(kind)) {
+    return {
+      ok: false,
+      error: `Unsupported provider setup target: ${kind}`,
+      supported: [...VALID_PUBLIC_PROVIDER_KINDS].sort(),
+    }
+  }
+  const defaults = providerWizardDefaults(kind)
+  const profileName = options.profileName || `${kind}-custom`
+  const profile = {
+    kind,
+    model: options.model || defaults.model,
+    label: options.label || defaults.label,
+    baseUrl: options.baseUrl || defaults.baseUrl,
+    description: `Configured by provider setup wizard for ${kind}.`,
+  }
+  const saved = await context.client.profileSave(profileName, profile, {
+    activate: options.activate ?? true,
+  })
+  const diagnostics = await context.client.providerDiagnostics(kind)
+  return {
+    ok: true,
+    profileName,
+    profile,
+    saved,
+    diagnostics,
+    secretPolicy: "API keys are never written to OneClaw config. Use the listed environment variables or subscription credentials.",
+    env: defaults.env,
+    notes: defaults.notes,
+    next: [
+      `Export one of: ${defaults.env.join(", ") || "(subscription credentials only)"}.`,
+      `/provider use ${profileName}`,
+      "/provider test",
+    ],
   }
 }
 
@@ -1074,6 +1187,28 @@ function parsePlanItems(input: string): string[] {
     .filter(Boolean)
 }
 
+function fillMcpResourceTemplate(template: string, values: string[]): string {
+  const assignments = new Map<string, string>()
+  const positional: string[] = []
+  for (const value of values) {
+    const match = value.match(/^([^=]+)=(.*)$/)
+    if (match) {
+      assignments.set(match[1], match[2])
+    } else {
+      positional.push(value)
+    }
+  }
+  let position = 0
+  return template.replace(/\{([^}]+)\}/g, (_match, key: string) => {
+    if (assignments.has(key)) {
+      return assignments.get(key) ?? ""
+    }
+    const next = positional[position]
+    position += 1
+    return next ?? `{${key}}`
+  })
+}
+
 async function swarmStatus(name: string): Promise<Record<string, unknown>> {
   const team = commandTeamRegistry.get(name)
   if (!team) {
@@ -1118,6 +1253,84 @@ async function createSwarmArtifact(
     artifact: artifact.record,
     indexPath: artifact.indexPath,
   }
+}
+
+async function createSwarmTextArtifact(
+  context: FrontendCommandContext,
+  name: string,
+  source: string,
+  content: string,
+  metadata: Record<string, unknown> = {},
+): Promise<Record<string, unknown>> {
+  const artifact = await createArtifact(context.cwd, {
+    kind: "swarm-summary",
+    name: `swarm-${name}-${source}`,
+    source,
+    contentType: "text/markdown",
+    extension: "md",
+    description: `Swarm ${name} ${source.replace(/^swarm-/, "")}`,
+    content,
+    metadata: {
+      team: name,
+      source,
+      ...metadata,
+    },
+  })
+  return {
+    artifact: artifact.record,
+    indexPath: artifact.indexPath,
+  }
+}
+
+function planItemsFromText(text: string): string[] {
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, "").trim())
+    .filter(line => line.length > 0)
+  return lines.length > 0
+    ? lines.slice(0, 8)
+    : parsePlanItems(text)
+}
+
+function swarmDiffSummary(context: FrontendCommandContext, name: string): Record<string, unknown> {
+  const team = commandTeamRegistry.get(name)
+  if (!team) {
+    return { error: `Swarm not found: ${name}` }
+  }
+  const worktrees = Object.entries(team.worktrees)
+  const targets = worktrees.length > 0
+    ? worktrees
+    : [["workspace", context.cwd]]
+  return {
+    team: name,
+    targets: targets.map(([agent, path]) => ({
+      agent,
+      path,
+      status: runGit(path, "status", "--short").output || "(clean)",
+      diffStat: runGit(path, "diff", "--stat").output || "(no diff)",
+    })),
+  }
+}
+
+async function createJsonArtifact(
+  context: FrontendCommandContext,
+  name: string,
+  source: string,
+  payload: unknown,
+  metadata: Record<string, unknown> = {},
+) {
+  return await createArtifact(context.cwd, {
+    kind: "tool-result",
+    name,
+    source,
+    contentType: "application/json",
+    extension: "json",
+    content: pretty(payload),
+    metadata: {
+      sessionId: context.sessionId,
+      ...metadata,
+    },
+  })
 }
 
 async function agentsSummary(context: FrontendCommandContext): Promise<Record<string, unknown>> {
@@ -1624,6 +1837,24 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         const payload = await context.client.providers()
         return { message: pretty(payload) }
       }
+      if (parts[0] === "setup-wizard") {
+        const target = parts[1]
+        const mutable = parts.slice(2)
+        const profileName = takeFlagValue(mutable, ["--name"])
+        const model = takeFlagValue(mutable, ["--model"])
+        const baseUrl = takeFlagValue(mutable, ["--base-url", "--baseUrl"])
+        const label = takeFlagValue(mutable, ["--label"])
+        const activate = !takeFlag(mutable, "--no-use")
+        return {
+          message: pretty(await providerSetupWizardSummary(context, target, {
+            profileName: profileName || undefined,
+            model: model || undefined,
+            baseUrl: baseUrl || undefined,
+            label: label || undefined,
+            activate,
+          })),
+        }
+      }
       if (parts[0] === "setup-plan" || parts[0] === "wizard" || parts[0] === "plan") {
         return {
           message: pretty(await providerSetupPlan(context, parts[1])),
@@ -1640,7 +1871,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       if (parts[0] !== "use" || !parts[1]) {
-        return { message: "Usage: /provider [show|list|doctor|setup|setup-plan|check|repair|test [kind]] | /provider use <profile-or-kind>" }
+        return { message: "Usage: /provider [show|list|doctor|setup|setup-plan|setup-wizard|check|repair|test [kind]] | /provider use <profile-or-kind>" }
       }
       const profile = await resolveProfile(context, parts[1])
       if (!profile) {
@@ -2788,6 +3019,30 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           message: pretty(commandTeamRegistry.setPlan(parts[1], plan)),
         }
       }
+      if (action === "split" && parts[1]) {
+        const name = parts[1]
+        const team = commandTeamRegistry.get(name)
+        if (!team?.goal) {
+          return { message: "Usage: /swarm split <name> (create a swarm goal first with /swarm create)" }
+        }
+        const rawPlan = await runCommandPrompt(
+          context,
+          [
+            "Split this swarm goal into 3-6 concrete implementation subtasks.",
+            "Return only one task per line.",
+            "",
+            `Goal: ${team.goal}`,
+          ].join("\n"),
+          { via: "swarm-split", team: name },
+        )
+        const plan = planItemsFromText(rawPlan)
+        return {
+          message: pretty({
+            team: commandTeamRegistry.setPlan(name, plan),
+            rawPlan,
+          }),
+        }
+      }
       if (action === "run" && parts[1]) {
         const name = parts[1]
         const team = commandTeamRegistry.get(name)
@@ -2849,9 +3104,31 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       if (action === "review" && parts[1]) {
+        if (parts[2] === "auto") {
+          const status = await swarmStatus(parts[1])
+          if ("error" in status) {
+            return { message: pretty(status) }
+          }
+          const review = await runCommandPrompt(
+            context,
+            [
+              "Review this swarm result. Return concise findings, risks, and next actions.",
+              "",
+              pretty(status),
+            ].join("\n"),
+            { via: "swarm-review", team: parts[1] },
+          )
+          const team = commandTeamRegistry.setReview(parts[1], "pending", review)
+          const artifact = await createSwarmTextArtifact(context, parts[1], "swarm-review-auto", review, {
+            status: "pending",
+          })
+          return {
+            message: pretty({ team, review, artifact }),
+          }
+        }
         const status = (parts[2] as "pending" | "approved" | "changes_requested" | undefined) ?? "pending"
         if (!["pending", "approved", "changes_requested"].includes(status)) {
-          return { message: "Usage: /swarm review <name> [pending|approved|changes_requested] [note]" }
+          return { message: "Usage: /swarm review <name> [pending|approved|changes_requested|auto] [note]" }
         }
         const team = commandTeamRegistry.setReview(
           parts[1],
@@ -2864,6 +3141,29 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       if (action === "merge" && parts[1]) {
+        if (parts[2] === "summary") {
+          const status = await swarmStatus(parts[1])
+          if ("error" in status) {
+            return { message: pretty(status) }
+          }
+          const summary = await runCommandPrompt(
+            context,
+            [
+              "Create a concise merge summary for this swarm.",
+              "Include completed work, review state, merge readiness, and risks.",
+              "",
+              pretty(status),
+            ].join("\n"),
+            { via: "swarm-merge-summary", team: parts[1] },
+          )
+          const team = commandTeamRegistry.setMerge(parts[1], "ready", summary)
+          const artifact = await createSwarmTextArtifact(context, parts[1], "swarm-merge-summary", summary, {
+            status: "ready",
+          })
+          return {
+            message: pretty({ team, summary, artifact }),
+          }
+        }
         const status = (parts[2] as "pending" | "ready" | "merged" | "blocked" | undefined) ?? "pending"
         if (!["pending", "ready", "merged", "blocked"].includes(status)) {
           return { message: "Usage: /swarm merge <name> [pending|ready|merged|blocked] [note]" }
@@ -2878,6 +3178,18 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           message: pretty({ team, artifact }),
         }
       }
+      if (action === "diff" && parts[1]) {
+        const diff = swarmDiffSummary(context, parts[1])
+        const artifact = await createSwarmTextArtifact(context, parts[1], "swarm-diff", pretty(diff), {
+          kind: "diff",
+        })
+        return {
+          message: pretty({
+            diff,
+            artifact,
+          }),
+        }
+      }
       if (action === "message" && parts[1]) {
         const message = args.split(/\s+/).slice(2).join(" ").trim()
         if (!message) {
@@ -2888,7 +3200,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       return {
-        message: "Usage: /swarm [list|create <name> <goal>|plan <name> <task 1 :: task 2>|run <name>|status <name>|artifact <name>|review <name> <status> [note]|merge <name> <status> [note]|message <name> <message>|delete <name>]",
+        message: "Usage: /swarm [list|create <name> <goal>|split <name>|plan <name> <task 1 :: task 2>|run <name>|status <name>|artifact <name>|review <name> <status|auto> [note]|merge <name> <status|summary> [note]|diff <name>|message <name> <message>|delete <name>]",
       }
     },
   })
@@ -2898,6 +3210,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     description: "List, inspect, or delete known session snapshots",
     handler: async (args, context) => {
       const parts = words(args)
+      const artifactRequested = takeFlag(parts, "--artifact") || takeFlag(parts, "-a")
       const scope = parts.includes("all") || parts[0] === "all" ? "all" : "project"
       const sessions = await listSessions(context, scope)
       if (parts.length === 0 || parts[0] === "list" || parts[0] === "all") {
@@ -2935,11 +3248,36 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       if (parts[0] === "export" && parts[1]) {
         const format = (parts[2] ?? "json") as "json" | "markdown" | "bundle"
         if (!["json", "markdown", "bundle"].includes(format)) {
-          return { message: "Usage: /sessions export <id> [json|markdown|bundle]" }
+          return { message: "Usage: /sessions export <id> [json|markdown|bundle] [--artifact]" }
         }
         const exported = format === "bundle"
           ? await context.client.sessionExportBundle(parts[1])
           : await context.client.sessionExport(parts[1], format)
+        if (artifactRequested && exported) {
+          const content = format === "bundle"
+            ? pretty(exported)
+            : "content" in exported && typeof exported.content === "string"
+              ? exported.content
+              : pretty(exported)
+          const artifact = await createArtifact(context.cwd, {
+            kind: "session-export",
+            name: `session-${parts[1]}-${format}`,
+            source: "sessions-export",
+            contentType: format === "markdown" ? "text/markdown" : "application/json",
+            extension: format === "markdown" ? "md" : "json",
+            content,
+            metadata: {
+              sessionId: parts[1],
+              format,
+            },
+          })
+          return {
+            message: pretty({
+              exported,
+              artifact: artifact.record,
+            }),
+          }
+        }
         return {
           message: pretty(exported),
         }
@@ -3117,8 +3455,27 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     description: "Run lightweight Python code-intelligence operations",
     handler: async (args, context) => {
       const parts = words(args)
+      const artifactRequested = takeFlag(parts, "--artifact") || takeFlag(parts, "-a")
       const action = parts.shift() ?? "workspace"
       let limit = 100
+      const returnPayload = async (
+        payload: Record<string, unknown>,
+        metadata: Record<string, unknown> = {},
+      ): Promise<FrontendCommandResult> => {
+        if (!artifactRequested) {
+          return { message: pretty(payload) }
+        }
+        const artifact = await createJsonArtifact(context, `lsp-${action}`, "lsp", payload, {
+          operation: payload.operation ?? action,
+          ...metadata,
+        })
+        return {
+          message: pretty({
+            ...payload,
+            artifact: artifact.record,
+          }),
+        }
+      }
       const limitValue = takeFlagValue(parts, ["--limit", "-n"])
       if (limitValue !== null) {
         const parsed = Number.parseInt(limitValue, 10)
@@ -3144,17 +3501,19 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         if (!query) {
           return { message: "Usage: /lsp workspace <query> [--limit 1-500]" }
         }
-        return {
-          message: pretty(await context.client.lsp({ operation: "workspace_symbol", query, limit })),
-        }
+        return await returnPayload(
+          await context.client.lsp({ operation: "workspace_symbol", query, limit }),
+          { query, limit },
+        )
       }
       if (action === "document" || action === "document_symbol") {
         if (!parts[0]) {
           return { message: "Usage: /lsp document <file.py> [--limit 1-500]" }
         }
-        return {
-          message: pretty(await context.client.lsp({ operation: "document_symbol", filePath: parts[0], limit })),
-        }
+        return await returnPayload(
+          await context.client.lsp({ operation: "document_symbol", filePath: parts[0], limit }),
+          { filePath: parts[0], limit },
+        )
       }
       if (action === "definition" || action === "go_to_definition") {
         const filePath = parts[0]
@@ -3162,9 +3521,10 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         if (!filePath || (!symbol && !position.line)) {
           return { message: "Usage: /lsp definition <file.py> <symbol>|--line <n> [--character <n>]" }
         }
-        return {
-          message: pretty(await context.client.lsp({ operation: "go_to_definition", filePath, symbol, ...position, limit })),
-        }
+        return await returnPayload(
+          await context.client.lsp({ operation: "go_to_definition", filePath, symbol, ...position, limit }),
+          { filePath, symbol, ...position, limit },
+        )
       }
       if (action === "references" || action === "find_references") {
         const filePath = parts[0]
@@ -3172,9 +3532,10 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         if (!filePath || (!symbol && !position.line)) {
           return { message: "Usage: /lsp references <file.py> <symbol>|--line <n> [--character <n>]" }
         }
-        return {
-          message: pretty(await context.client.lsp({ operation: "find_references", filePath, symbol, ...position, limit })),
-        }
+        return await returnPayload(
+          await context.client.lsp({ operation: "find_references", filePath, symbol, ...position, limit }),
+          { filePath, symbol, ...position, limit },
+        )
       }
       if (action === "hover") {
         const filePath = parts[0]
@@ -3182,9 +3543,10 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         if (!filePath || (!symbol && !position.line)) {
           return { message: "Usage: /lsp hover <file.py> <symbol>|--line <n> [--character <n>]" }
         }
-        return {
-          message: pretty(await context.client.lsp({ operation: "hover", filePath, symbol, ...position, limit })),
-        }
+        return await returnPayload(
+          await context.client.lsp({ operation: "hover", filePath, symbol, ...position, limit }),
+          { filePath, symbol, ...position, limit },
+        )
       }
       return {
         message: "Usage: /lsp workspace <query> | /lsp document <file.py> | /lsp definition <file.py> <symbol> | /lsp references <file.py> <symbol> | /lsp hover <file.py> <symbol>",
@@ -3348,23 +3710,38 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     description: "Show or manage the current session todo list",
     handler: async (args, context) => {
       const parts = words(args)
+      const artifactRequested = takeFlag(parts, "--artifact") || takeFlag(parts, "-a")
       const action = parts[0] ?? "list"
       const payload = await context.client.todo(context.sessionId)
       const items = todoItemsFromPayload(payload)
+      const returnTodoPayload = async (result: Record<string, unknown>) => {
+        if (!artifactRequested) {
+          return { message: pretty(result) }
+        }
+        const artifact = await createJsonArtifact(context, `todo-${context.sessionId}`, "todo", result, {
+          action,
+        })
+        return {
+          message: pretty({
+            ...result,
+            artifact: artifact.record,
+          }),
+        }
+      }
       if (action === "list" || action === "show") {
-        return { message: pretty(payload) }
+        return await returnTodoPayload(payload)
       }
       if (action === "add") {
-        const title = args.replace(/^add\s+/i, "").trim()
+        const title = parts.slice(1).join(" ").trim()
         if (!title) {
-          return { message: "Usage: /todo add <title>" }
+          return { message: "Usage: /todo add <title> [--artifact]" }
         }
         const nextId = `todo-${items.length + 1}`
         const result = await context.client.todoUpdate(context.sessionId, [
           ...items,
           { id: nextId, title, status: "pending" },
         ])
-        return { message: pretty(result) }
+        return await returnTodoPayload(result)
       }
       if (["pending", "start", "done", "block"].includes(action) && parts[1]) {
         const status = action === "start"
@@ -3374,19 +3751,19 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
             : action
         const updated = items.map(item => item.id === parts[1] ? { ...item, status } : item)
         const result = await context.client.todoUpdate(context.sessionId, updated)
-        return { message: pretty(result) }
+        return await returnTodoPayload(result)
       }
       if (action === "remove" && parts[1]) {
         const result = await context.client.todoUpdate(
           context.sessionId,
           items.filter(item => item.id !== parts[1]),
         )
-        return { message: pretty(result) }
+        return await returnTodoPayload(result)
       }
       if (action === "clear") {
-        return { message: pretty(await context.client.todoUpdate(context.sessionId, [])) }
+        return await returnTodoPayload(await context.client.todoUpdate(context.sessionId, []))
       }
-      return { message: "Usage: /todo [list|add <title>|pending <id>|start <id>|done <id>|block <id>|remove <id>|clear]" }
+      return { message: "Usage: /todo [list|add <title>|pending <id>|start <id>|done <id>|block <id>|remove <id>|clear] [--artifact]" }
     },
   })
 
@@ -3654,6 +4031,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     description: "Search available builtin, plugin, and MCP tools",
     handler: async (args, context) => {
       const parts = words(args)
+      const artifactRequested = takeFlag(parts, "--artifact") || takeFlag(parts, "-a")
       let limit = 20
       const limitValue = takeFlagValue(parts, ["--limit", "-n"])
       if (limitValue !== null) {
@@ -3665,10 +4043,23 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       }
       const query = parts.join(" ").trim()
       if (!query) {
-        return { message: "Usage: /tool-search <query> [--limit 1-100]" }
+        return { message: "Usage: /tool-search <query> [--limit 1-100] [--artifact]" }
+      }
+      const payload = await context.client.toolSearch(query, { limit })
+      if (artifactRequested) {
+        const artifact = await createJsonArtifact(context, `tool-search-${query}`, "tool_search", payload, {
+          query,
+          limit,
+        })
+        return {
+          message: pretty({
+            ...payload,
+            artifact: artifact.record,
+          }),
+        }
       }
       return {
-        message: pretty(await context.client.toolSearch(query, { limit })),
+        message: pretty(payload),
       }
     },
   })
@@ -3831,13 +4222,14 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         if (subaction === "install" && parts[2]) {
           const result = await installPluginFromMarketplace(config, context.cwd, parts[2], {
             trust: parts.includes("--trust"),
+            dryRun: parts.includes("--dry-run"),
           })
           if (result.installed) {
             await context.client.reload()
           }
           return { message: pretty(result) }
         }
-        return { message: "Usage: /plugin marketplace [list [query]|init [project|user]|add <project|user> <name> <path-or-source> [description]|remove <project|user> <name>|show <name>|install <name> [--trust]]" }
+        return { message: "Usage: /plugin marketplace [list [query]|init [project|user]|add <project|user> <name> <path-or-source> [description]|remove <project|user> <name>|show <name>|install <name> [--dry-run|--trust]]" }
       }
       if (action === "install") {
         const sourcePath = args.replace(/^install\s+/, "").trim()
@@ -4214,6 +4606,26 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       if (!parts[0] || parts[0] === "status" || parts[0] === "list") {
         return { message: pretty(await context.client.mcp({ verbose: false })) }
       }
+      if (parts[0] === "browse") {
+        const payload = await context.client.mcp({ verbose: true }) as {
+          statuses?: Array<Record<string, unknown>>
+          tools?: Array<Record<string, unknown>>
+          resources?: Array<Record<string, unknown>>
+          resourceTemplates?: Array<Record<string, unknown>>
+        }
+        if (!parts[1]) {
+          return { message: pretty(payload) }
+        }
+        const server = parts[1]
+        return {
+          message: pretty({
+            status: (payload.statuses ?? []).find(item => extractString(item, "name") === server) ?? null,
+            tools: (payload.tools ?? []).filter(item => extractString(item, "server", server) === server || String(item.qualifiedName ?? "").includes(`__${server}__`)),
+            resources: (payload.resources ?? []).filter(item => extractString(item, "server") === server),
+            resourceTemplates: (payload.resourceTemplates ?? []).filter(item => extractString(item, "server") === server),
+          }),
+        }
+      }
       if (parts[0] === "tools") {
         return { message: pretty(await context.client.mcp({ verbose: true })) }
       }
@@ -4313,11 +4725,25 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         const payload = await context.client.mcp({ verbose: true }) as { resourceTemplates?: unknown }
         return { message: pretty(payload.resourceTemplates ?? []) }
       }
+      if (parts[0] === "read-template" && parts[1] && parts[2]) {
+        const server = parts[1]
+        const uri = fillMcpResourceTemplate(parts[2], parts.slice(3))
+        const payload = await context.client.mcpReadResource(server, uri)
+        return {
+          message: [
+            `server: ${server}`,
+            `template: ${parts[2]}`,
+            `uri: ${uri}`,
+            "",
+            String(payload.content ?? ""),
+          ].join("\n"),
+        }
+      }
       if (parts[0] === "read" && parts[1] && parts[2]) {
         const payload = await context.client.mcpReadResource(parts[1], parts.slice(2).join(" "))
         return { message: String(payload.content ?? "") }
       }
-      return { message: "Usage: /mcp [status|tools|resources|templates|capabilities|reconnect [server]|add <name> <command> [args...]|remove <server>|auth <server> <env|bearer> <value> [--key KEY]|read <server> <uri>]" }
+      return { message: "Usage: /mcp [status|browse [server]|tools|resources|templates|capabilities|reconnect [server]|add <name> <command> [args...]|remove <server>|auth <server> <env|bearer> <value> [--key KEY]|read <server> <uri>|read-template <server> <uriTemplate> [key=value...]]" }
     },
   })
 
