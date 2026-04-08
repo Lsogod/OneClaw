@@ -2,6 +2,14 @@ import { mkdir, readFile, readdir, rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { basename, join, resolve } from "node:path"
+import {
+  createArtifact,
+  listArtifacts,
+  readArtifactContent,
+  removeArtifact,
+  showArtifact,
+  type ArtifactKind,
+} from "../artifacts/catalog.mts"
 import { collectProviderAuthStatuses } from "../providers/auth.mts"
 import { TeamRegistry } from "../agents/team-registry.mts"
 import {
@@ -65,6 +73,13 @@ const VALID_PUBLIC_PROVIDER_KINDS = new Set([
   "openai-compatible",
   "codex-subscription",
   "github-copilot",
+])
+const VALID_ARTIFACT_KINDS = new Set<ArtifactKind>([
+  "tool-result",
+  "swarm-summary",
+  "session-export",
+  "diagnostic-bundle",
+  "text",
 ])
 type CatalogEntry = {
   name: string
@@ -1074,6 +1089,34 @@ async function swarmStatus(name: string): Promise<Record<string, unknown>> {
   return {
     team,
     tasks,
+  }
+}
+
+async function createSwarmArtifact(
+  context: FrontendCommandContext,
+  name: string,
+  source: "swarm-status" | "swarm-review" | "swarm-merge",
+): Promise<Record<string, unknown>> {
+  const payload = await swarmStatus(name)
+  if ("error" in payload) {
+    return payload
+  }
+  const artifact = await createArtifact(context.cwd, {
+    kind: "swarm-summary",
+    name: `swarm-${name}-${source}`,
+    source,
+    contentType: "application/json",
+    extension: "json",
+    description: `Swarm ${name} ${source.replace(/^swarm-/, "")} snapshot`,
+    content: pretty(payload),
+    metadata: {
+      team: name,
+      source,
+    },
+  })
+  return {
+    artifact: artifact.record,
+    indexPath: artifact.indexPath,
   }
 }
 
@@ -2165,6 +2208,60 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   })
 
   registry.register({
+    name: "artifacts",
+    description: "List, read, create, or remove local project artifacts",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts[0] ?? "list"
+      if (action === "list" || action === "search") {
+        return {
+          message: pretty(await listArtifacts(context.cwd, parts.slice(1).join(" ").trim())),
+        }
+      }
+      if (action === "show" && parts[1]) {
+        const record = await showArtifact(context.cwd, parts[1])
+        return {
+          message: record ? pretty(record) : `Artifact not found: ${parts[1]}`,
+        }
+      }
+      if (action === "read" && parts[1]) {
+        const payload = await readArtifactContent(context.cwd, parts[1])
+        return {
+          message: payload ? payload.content : `Artifact not found: ${parts[1]}`,
+        }
+      }
+      if ((action === "remove" || action === "delete") && parts[1]) {
+        return {
+          message: pretty(await removeArtifact(context.cwd, parts[1])),
+        }
+      }
+      if (action === "create" && parts[1]) {
+        if (!VALID_ARTIFACT_KINDS.has(parts[1] as ArtifactKind)) {
+          return { message: "Usage: /artifacts create <tool-result|swarm-summary|session-export|diagnostic-bundle|text> <name> :: <content>" }
+        }
+        const payload = parseTitleAndBody(args.replace(/^create\s+\S+\s*/, ""))
+        if (!payload) {
+          return { message: "Usage: /artifacts create <kind> <name> :: <content>" }
+        }
+        return {
+          message: pretty(await createArtifact(context.cwd, {
+            kind: parts[1] as ArtifactKind,
+            name: payload.title,
+            content: payload.content,
+            source: "command",
+            contentType: "text/markdown",
+            extension: "md",
+            metadata: {
+              sessionId: context.sessionId,
+            },
+          })),
+        }
+      }
+      return { message: "Usage: /artifacts [list [query]|show <id>|read <id>|remove <id>|create <kind> <name> :: <content>]" }
+    },
+  })
+
+  registry.register({
     name: "bridge",
     description: "Inspect or use the bridge control plane",
     handler: async (args, context) => {
@@ -2746,17 +2843,24 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           message: pretty(await swarmStatus(parts[1])),
         }
       }
+      if (action === "artifact" && parts[1]) {
+        return {
+          message: pretty(await createSwarmArtifact(context, parts[1], "swarm-status")),
+        }
+      }
       if (action === "review" && parts[1]) {
         const status = (parts[2] as "pending" | "approved" | "changes_requested" | undefined) ?? "pending"
         if (!["pending", "approved", "changes_requested"].includes(status)) {
           return { message: "Usage: /swarm review <name> [pending|approved|changes_requested] [note]" }
         }
+        const team = commandTeamRegistry.setReview(
+          parts[1],
+          status,
+          args.split(/\s+/).slice(3).join(" ").trim(),
+        )
+        const artifact = await createSwarmArtifact(context, parts[1], "swarm-review")
         return {
-          message: pretty(commandTeamRegistry.setReview(
-            parts[1],
-            status,
-            args.split(/\s+/).slice(3).join(" ").trim(),
-          )),
+          message: pretty({ team, artifact }),
         }
       }
       if (action === "merge" && parts[1]) {
@@ -2764,12 +2868,14 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         if (!["pending", "ready", "merged", "blocked"].includes(status)) {
           return { message: "Usage: /swarm merge <name> [pending|ready|merged|blocked] [note]" }
         }
+        const team = commandTeamRegistry.setMerge(
+          parts[1],
+          status,
+          args.split(/\s+/).slice(3).join(" ").trim(),
+        )
+        const artifact = await createSwarmArtifact(context, parts[1], "swarm-merge")
         return {
-          message: pretty(commandTeamRegistry.setMerge(
-            parts[1],
-            status,
-            args.split(/\s+/).slice(3).join(" ").trim(),
-          )),
+          message: pretty({ team, artifact }),
         }
       }
       if (action === "message" && parts[1]) {
@@ -2782,7 +2888,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       return {
-        message: "Usage: /swarm [list|create <name> <goal>|plan <name> <task 1 :: task 2>|run <name>|status <name>|review <name> <status> [note]|merge <name> <status> [note]|message <name> <message>|delete <name>]",
+        message: "Usage: /swarm [list|create <name> <goal>|plan <name> <task 1 :: task 2>|run <name>|status <name>|artifact <name>|review <name> <status> [note]|merge <name> <status> [note]|message <name> <message>|delete <name>]",
       }
     },
   })
@@ -2955,6 +3061,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     description: "Index or search workspace code symbols",
     handler: async (args, context) => {
       const parts = words(args)
+      const artifactRequested = takeFlag(parts, "--artifact") || takeFlag(parts, "-a")
       let limit = 200
       let path = "."
       const limitIndex = parts.findIndex(part => part === "--limit" || part === "-n")
@@ -2977,6 +3084,28 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       }
       const query = parts.join(" ").trim()
       const payload = await context.client.codeSymbols({ path, query, limit })
+      if (artifactRequested) {
+        const artifact = await createArtifact(context.cwd, {
+          kind: "tool-result",
+          name: `symbols-${query || path}`,
+          source: "code_symbols",
+          contentType: "application/json",
+          extension: "json",
+          content: pretty(payload),
+          metadata: {
+            sessionId: context.sessionId,
+            path,
+            query,
+            limit,
+          },
+        })
+        return {
+          message: pretty({
+            ...payload,
+            artifact: artifact.record,
+          }),
+        }
+      }
       return {
         message: pretty(payload),
       }
@@ -3068,23 +3197,43 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     description: "Fetch a HTTP(S) URL through the kernel web_fetch tool",
     handler: async (args, context) => {
       const parts = words(args)
+      const artifactRequested = takeFlag(parts, "--artifact") || takeFlag(parts, "-a")
       const url = parts[0]
       if (!url) {
-        return { message: "Usage: /fetch <url> [maxChars]" }
+        return { message: "Usage: /fetch <url> [maxChars] [--artifact]" }
       }
       const maxChars = parts[1] ? Number.parseInt(parts[1], 10) : 8000
       if (!Number.isFinite(maxChars) || maxChars < 256 || maxChars > 50000) {
-        return { message: "Usage: /fetch <url> [maxChars: 256-50000]" }
+        return { message: "Usage: /fetch <url> [maxChars: 256-50000] [--artifact]" }
       }
       const result = await context.client.webFetch(url, { maxChars })
+      const message = [
+        `url: ${result.url}`,
+        `status: ${result.status}`,
+        `contentType: ${result.contentType}`,
+        "",
+        result.text,
+      ].join("\n")
+      if (!artifactRequested) {
+        return { message }
+      }
+      const artifact = await createArtifact(context.cwd, {
+        kind: "tool-result",
+        name: `fetch-${result.url}`,
+        source: "web_fetch",
+        contentType: "text/plain",
+        extension: "txt",
+        content: message,
+        metadata: {
+          sessionId: context.sessionId,
+          url: result.url,
+          status: result.status,
+          contentType: result.contentType,
+          maxChars,
+        },
+      })
       return {
-        message: [
-          `url: ${result.url}`,
-          `status: ${result.status}`,
-          `contentType: ${result.contentType}`,
-          "",
-          result.text,
-        ].join("\n"),
+        message: `${message}\n\nartifact: ${artifact.record.id} ${artifact.record.relativePath}`,
       }
     },
   })
@@ -3094,6 +3243,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     description: "Search the web through the kernel web_search tool",
     handler: async (args, context) => {
       const parts = words(args)
+      const artifactRequested = takeFlag(parts, "--artifact") || takeFlag(parts, "-a")
       let maxResults = 5
       const limitIndex = parts.findIndex(part => part === "--limit" || part === "-n")
       if (limitIndex >= 0) {
@@ -3106,10 +3256,32 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       }
       const query = parts.join(" ").trim()
       if (!query) {
-        return { message: "Usage: /search-web <query> [--limit 1-20]" }
+        return { message: "Usage: /search-web <query> [--limit 1-20] [--artifact]" }
+      }
+      const payload = await context.client.webSearch(query, { maxResults })
+      if (artifactRequested) {
+        const artifact = await createArtifact(context.cwd, {
+          kind: "tool-result",
+          name: `search-web-${query}`,
+          source: "web_search",
+          contentType: "application/json",
+          extension: "json",
+          content: pretty(payload),
+          metadata: {
+            sessionId: context.sessionId,
+            query,
+            maxResults,
+          },
+        })
+        return {
+          message: pretty({
+            ...payload,
+            artifact: artifact.record,
+          }),
+        }
       }
       return {
-        message: pretty(await context.client.webSearch(query, { maxResults })),
+        message: pretty(payload),
       }
     },
   })

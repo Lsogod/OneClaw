@@ -452,6 +452,7 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/rate-limit-options")
     expect(helpText).toContain("/feedback")
     expect(helpText).toContain("/instructions")
+    expect(helpText).toContain("/artifacts")
   })
 
   test("OpenHarness-style utility commands manage project and session snapshots", async () => {
@@ -1552,6 +1553,50 @@ describe("Frontend command registry", () => {
     }
   })
 
+  test("artifacts command catalogs tool results and local content", async () => {
+    const workspace = join(tmpdir(), `oneclaw-artifacts-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    await mkdir(workspace, { recursive: true })
+    const registry = createFrontendCommandRegistry()
+    const context = {
+      client: createFakeClient(),
+      sessionId: "session_current",
+      cwd: workspace,
+    } as never
+
+    const createLookup = registry.lookup("/artifacts create text Notes :: Artifact body")
+    const fetchLookup = registry.lookup("/fetch https://example.test/page 1200 --artifact")
+    const symbolsLookup = registry.lookup("/symbols OneClaw --path src --limit 5 --artifact")
+    const searchLookup = registry.lookup("/search-web OneClaw --limit 2 --artifact")
+
+    const createResult = await createLookup?.command.handler(createLookup.args, context)
+    const fetchResult = await fetchLookup?.command.handler(fetchLookup.args, context)
+    const symbolsResult = await symbolsLookup?.command.handler(symbolsLookup.args, context)
+    const searchResult = await searchLookup?.command.handler(searchLookup.args, context)
+    const createPayload = JSON.parse(createResult?.message ?? "{}") as {
+      record?: { id?: string; path?: string }
+    }
+    const artifactId = createPayload.record?.id ?? ""
+    const listLookup = registry.lookup("/artifacts list")
+    const showLookup = registry.lookup(`/artifacts show ${artifactId}`)
+    const readLookup = registry.lookup(`/artifacts read ${artifactId}`)
+    const removeLookup = registry.lookup(`/artifacts remove ${artifactId}`)
+    const listResult = await listLookup?.command.handler(listLookup.args, context)
+    const showResult = await showLookup?.command.handler(showLookup.args, context)
+    const readResult = await readLookup?.command.handler(readLookup.args, context)
+    const removeResult = await removeLookup?.command.handler(removeLookup.args, context)
+
+    expect(createResult?.message).toContain("artifact_")
+    expect(createPayload.record?.path).toContain(".oneclaw")
+    expect(fetchResult?.message).toContain("artifact:")
+    expect(symbolsResult?.message).toContain("artifact_")
+    expect(searchResult?.message).toContain("artifact_")
+    expect(listResult?.message).toContain("fetch-https")
+    expect(showResult?.message).toContain("Notes")
+    expect(readResult?.message).toContain("Artifact body")
+    expect(removeResult?.message).toContain('"removed": true')
+    expect(existsSync(createPayload.record?.path ?? "")).toBe(false)
+  })
+
   test("hooks command initializes, validates, mutates, and reloads hook files", async () => {
     const originalHome = process.env.ONECLAW_HOME
     const homeDir = join(tmpdir(), `oneclaw-hooks-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
@@ -2263,6 +2308,8 @@ describe("Frontend command registry", () => {
   test("swarm command runs plan-driven team lifecycle", async () => {
     const registry = createFrontendCommandRegistry()
     const name = `swarm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const workspace = join(tmpdir(), `oneclaw-swarm-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    await mkdir(workspace, { recursive: true })
     const created: Array<Record<string, unknown> | undefined> = []
     const prompts: string[] = []
     const context = {
@@ -2288,7 +2335,7 @@ describe("Frontend command registry", () => {
         },
       }),
       sessionId: "session_current",
-      cwd: "/tmp/workspace",
+      cwd: workspace,
     } as never
 
     const createLookup = registry.lookup(`/swarm create ${name} ship the release`)
@@ -2297,6 +2344,8 @@ describe("Frontend command registry", () => {
     const statusLookup = registry.lookup(`/swarm status ${name}`)
     const reviewLookup = registry.lookup(`/swarm review ${name} approved ready`)
     const mergeLookup = registry.lookup(`/swarm merge ${name} ready reviewed`)
+    const artifactLookup = registry.lookup(`/swarm artifact ${name}`)
+    const artifactsLookup = registry.lookup("/artifacts list swarm")
 
     const createResult = await createLookup?.command.handler(createLookup.args, context)
     const planResult = await planLookup?.command.handler(planLookup.args, context)
@@ -2304,6 +2353,8 @@ describe("Frontend command registry", () => {
     const statusResult = await statusLookup?.command.handler(statusLookup.args, context)
     const reviewResult = await reviewLookup?.command.handler(reviewLookup.args, context)
     const mergeResult = await mergeLookup?.command.handler(mergeLookup.args, context)
+    const artifactResult = await artifactLookup?.command.handler(artifactLookup.args, context)
+    const artifactsResult = await artifactsLookup?.command.handler(artifactsLookup.args, context)
 
     expect(createResult?.message).toContain(name)
     expect(planResult?.message).toContain("inspect risk")
@@ -2313,7 +2364,11 @@ describe("Frontend command registry", () => {
     expect(runResult?.message).toContain("\"status\": \"completed\"")
     expect(statusResult?.message).toContain("\"tasks\"")
     expect(reviewResult?.message).toContain("\"approved\"")
+    expect(reviewResult?.message).toContain("swarm-review")
     expect(mergeResult?.message).toContain("\"ready\"")
+    expect(mergeResult?.message).toContain("swarm-merge")
+    expect(artifactResult?.message).toContain("swarm-status")
+    expect(artifactsResult?.message).toContain(name)
   })
 
   test("stats command aggregates state, usage, session, skill, and plugin views", async () => {
