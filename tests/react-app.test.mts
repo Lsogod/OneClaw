@@ -14,6 +14,7 @@ import {
   buildObservabilityPanelLines,
   extractSseFrames,
   formatArtifactContentForInspector,
+  resolvePromptInputBorderColor,
   resolveUiPresentation,
   resolveStatusBarStats,
   shouldRenderBridgePanel,
@@ -356,5 +357,10 @@ describe("TUI view model", () => {
       observabilityKey: "ctrl+g",
     })
     expect(resolveUiPresentation({ provider: "codex-subscription", activeProfile: "codex-subscription" }).submitKey).toBe("enter")
+  })
+
+  test("prompt input border follows focus and running state", () => {
+    expect(resolvePromptInputBorderColor(false, { primaryColor: "cyan" })).toBe("blue")
+    expect(resolvePromptInputBorderColor(true, { primaryColor: "cyan" })).toBe("yellow")
   })
 })

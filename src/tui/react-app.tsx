@@ -314,6 +314,13 @@ export function resolveUiPresentation(runtimeState: RuntimeStateView): UiPresent
   }
 }
 
+export function resolvePromptInputBorderColor(
+  running: boolean,
+  presentation: Pick<UiPresentation, "primaryColor">,
+): string {
+  return running ? "yellow" : "blue"
+}
+
 function appendUiEvent(previous: UiEvent[], label: string): UiEvent[] {
   return [
     ...previous,
@@ -1555,6 +1562,34 @@ function StatusBar(props: {
       <Text color={presentation.mutedColor}>
         {`provider: ${stats.provider} │ profile: ${stats.profile} │ model: ${stats.model} │ mode: ${stats.permissionMode} │ effort: ${stats.effort}${stats.fastMode ? " fast" : ""}${stats.vimMode ? " vim" : ""}${stats.voiceMode ? " voice" : ""} │ tokens: ${stats.tokensIn}↓ ${stats.tokensOut}↑ │ mcp: ${stats.mcpConnected} │ plugins: ${stats.pluginCount} │ sessions: ${props.sessionCount} │ ${bridgeSummary} │ ${artifactSummary} │ cost: $${stats.estimatedCostUsd.toFixed(4)}${props.running ? ` │ running ${props.activeRequestId ?? props.selectedSessionId}` : ""}`}
       </Text>
+    </Box>
+  )
+}
+
+function PromptInputBox(props: {
+  running: boolean
+  inputBuffer: string
+  presentation: UiPresentation
+}) {
+  const borderColor = resolvePromptInputBorderColor(props.running, props.presentation)
+  return (
+    <Box
+      borderStyle="round"
+      borderColor={borderColor}
+      width="100%"
+      paddingX={1}
+      paddingY={0}
+      marginTop={1}
+    >
+      {props.running ? (
+        <Text color="yellow" bold>{"● "}</Text>
+      ) : (
+        <Text color={props.presentation.primaryColor} bold>{"> "}</Text>
+      )}
+      <Text>{props.inputBuffer}</Text>
+      {!props.running && !props.inputBuffer ? (
+        <Text color={props.presentation.mutedColor}>{"Type a prompt or slash command..."}</Text>
+      ) : null}
     </Box>
   )
 }
@@ -3120,11 +3155,11 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
           <Text color="yellow">{"Connecting to backend..."}</Text>
         </Box>
       ) : modalState ? null : (
-        <Box>
-          {running ? <Text color="yellow" bold>{"● "}</Text> : <Text color={presentation.primaryColor} bold>{"> "}</Text>}
-          <Text>{inputBuffer}</Text>
-          {!running && !inputBuffer ? <Text dim>{"Type a prompt or slash command..."}</Text> : null}
-        </Box>
+        <PromptInputBox
+          running={running}
+          inputBuffer={inputBuffer}
+          presentation={presentation}
+        />
       )}
 
       {ready && !modalState && !running ? (
