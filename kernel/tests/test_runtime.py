@@ -327,6 +327,59 @@ class KernelRuntimeTests(unittest.TestCase):
                 else:
                     os.environ["ONECLAW_LSP_TIMEOUT_MS"] = original_timeout
 
+    def test_lsp_query_can_reuse_persistent_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            os.environ["ONECLAW_HOME"] = root
+            os.environ["ONECLAW_PROVIDER"] = "internal-test"
+            original_command = os.environ.get("ONECLAW_LSP_COMMAND")
+            original_mode = os.environ.get("ONECLAW_LSP_MODE")
+            original_strict = os.environ.get("ONECLAW_LSP_STRICT")
+            original_timeout = os.environ.get("ONECLAW_LSP_TIMEOUT_MS")
+            adapter_path = Path(root, "persistent_lsp_adapter.py")
+            counter_path = Path(root, "counter.txt")
+            adapter_path.write_text(
+                "import json, sys, pathlib\n"
+                f"counter = pathlib.Path({str(counter_path)!r})\n"
+                "counter.write_text(str(int(counter.read_text() or '0') + 1) if counter.exists() else '1')\n"
+                "for line in sys.stdin:\n"
+                "    payload = json.loads(line)\n"
+                "    sys.stdout.write(json.dumps({\n"
+                "      'results': [{'name': payload.get('query') or 'persistent-symbol'}],\n"
+                "      'count': 1,\n"
+                "    }) + '\\n')\n"
+                "    sys.stdout.flush()\n",
+                "utf-8",
+            )
+            os.environ["ONECLAW_LSP_COMMAND"] = f"{sys.executable} {adapter_path}"
+            os.environ["ONECLAW_LSP_MODE"] = "persistent"
+            os.environ["ONECLAW_LSP_STRICT"] = "1"
+            os.environ["ONECLAW_LSP_TIMEOUT_MS"] = "5000"
+            try:
+                kernel = OneClawKernel(root)
+                first = kernel.lsp_query("workspace_symbol", query="First", limit=5)
+                second = kernel.lsp_query("workspace_symbol", query="Second", limit=5)
+                self.assertEqual(first["adapter"]["kind"], "external-persistent")
+                self.assertEqual(second["results"][0]["name"], "Second")
+                kernel.shutdown()
+                self.assertEqual(counter_path.read_text("utf-8"), "1")
+            finally:
+                if original_command is None:
+                    os.environ.pop("ONECLAW_LSP_COMMAND", None)
+                else:
+                    os.environ["ONECLAW_LSP_COMMAND"] = original_command
+                if original_mode is None:
+                    os.environ.pop("ONECLAW_LSP_MODE", None)
+                else:
+                    os.environ["ONECLAW_LSP_MODE"] = original_mode
+                if original_strict is None:
+                    os.environ.pop("ONECLAW_LSP_STRICT", None)
+                else:
+                    os.environ["ONECLAW_LSP_STRICT"] = original_strict
+                if original_timeout is None:
+                    os.environ.pop("ONECLAW_LSP_TIMEOUT_MS", None)
+                else:
+                    os.environ["ONECLAW_LSP_TIMEOUT_MS"] = original_timeout
+
     def test_internal_test_provider_emits_text_delta_events(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             os.environ["ONECLAW_HOME"] = root

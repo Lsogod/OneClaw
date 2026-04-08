@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
+import { createHmac } from "node:crypto"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
@@ -458,11 +459,21 @@ describe("Frontend command registry", () => {
 
   test("channels command manages local gateway registrations and inbox records", async () => {
     const originalHome = process.env.ONECLAW_HOME
+    const originalSecret = process.env.ONECLAW_CHANNEL_SECRET
     const homeDir = join(tmpdir(), `oneclaw-channels-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     const workspace = join(tmpdir(), `oneclaw-channels-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     await mkdir(homeDir, { recursive: true })
     await mkdir(workspace, { recursive: true })
     process.env.ONECLAW_HOME = homeDir
+    process.env.ONECLAW_CHANNEL_SECRET = "channel-secret"
+    let deliveredBody = ""
+    const server = Bun.serve({
+      port: 0,
+      fetch: async request => {
+        deliveredBody = await request.text()
+        return new Response("ok")
+      },
+    })
 
     try {
       const registry = createFrontendCommandRegistry()
@@ -471,8 +482,9 @@ describe("Frontend command registry", () => {
         sessionId: "session_current",
         cwd: workspace,
       } as never
-      const addLookup = registry.lookup("/channels add slack release-room --label Release Room --secret-env SLACK_TOKEN")
-      const sendLookup = registry.lookup("/channels send release-room deploy finished")
+      const deliveryUrl = `http://127.0.0.1:${server.port}/delivery`
+      const addLookup = registry.lookup(`/channels add slack release-room --label Release Room --secret-env ONECLAW_CHANNEL_SECRET --delivery-url ${deliveryUrl}`)
+      const sendLookup = registry.lookup("/channels send release-room deploy finished --deliver")
 
       const addResult = await addLookup?.command.handler(addLookup.args, context)
       const sendResult = await sendLookup?.command.handler(sendLookup.args, context)
@@ -481,22 +493,33 @@ describe("Frontend command registry", () => {
         messages?: Array<{ id: string }>
       }
       const messageId = inboxPayload.messages?.[0]?.id ?? ""
+      const signature = createHmac("sha256", "channel-secret").update("payload").digest("hex")
       const ackResult = await registry.lookup(`/channels ack ${messageId}`)?.command.handler(`ack ${messageId}`, context)
+      const verifyResult = await registry.lookup(`/channels verify release-room sha256=${signature} :: payload`)?.command.handler(`verify release-room sha256=${signature} :: payload`, context)
       const showResult = await registry.lookup("/channels show release-room")?.command.handler("show release-room", context)
       const removeResult = await registry.lookup("/channels remove release-room")?.command.handler("remove release-room", context)
 
       expect(addResult?.message).toContain("release-room")
       expect(addResult?.message).toContain("slack")
       expect(sendResult?.message).toContain("deploy finished")
+      expect(sendResult?.message).toContain('"delivered": true')
+      expect(deliveredBody).toContain("deploy finished")
       expect(inboxResult?.message).toContain(messageId)
       expect(ackResult?.message).toContain('"acknowledged": true')
+      expect(verifyResult?.message).toContain('"verified": true')
       expect(showResult?.message).toContain("release-room")
       expect(removeResult?.message).toContain('"removed": true')
     } finally {
+      server.stop()
       if (originalHome === undefined) {
         delete process.env.ONECLAW_HOME
       } else {
         process.env.ONECLAW_HOME = originalHome
+      }
+      if (originalSecret === undefined) {
+        delete process.env.ONECLAW_CHANNEL_SECRET
+      } else {
+        process.env.ONECLAW_CHANNEL_SECRET = originalSecret
       }
     }
   })
@@ -1348,7 +1371,9 @@ describe("Frontend command registry", () => {
       const list = registry.lookup("/plugin marketplace list market")
       const show = registry.lookup("/plugin marketplace show market-plugin")
       const dryRun = registry.lookup("/plugin marketplace install market-plugin --dry-run")
+      const wrongHash = registry.lookup("/plugin marketplace install market-plugin --sha256 deadbeef")
       const install = registry.lookup("/plugin marketplace install market-plugin --trust")
+      const requireTrust = registry.lookup("/plugin marketplace install market-plugin --require-trust")
       const installRemote = registry.lookup("/plugin marketplace install remote-plugin --trust")
       const remove = registry.lookup("/plugin marketplace remove project market-plugin")
 
@@ -1359,7 +1384,9 @@ describe("Frontend command registry", () => {
       const listResult = await list?.command.handler(list.args, context)
       const showResult = await show?.command.handler(show.args, context)
       const dryRunResult = await dryRun?.command.handler(dryRun.args, context)
+      const wrongHashResult = await wrongHash?.command.handler(wrongHash.args, context)
       const installResult = await install?.command.handler(install.args, context)
+      const requireTrustResult = await requireTrust?.command.handler(requireTrust.args, context)
       const installRemoteResult = await installRemote?.command.handler(installRemote.args, context)
       const removeResult = await remove?.command.handler(remove.args, context)
 
@@ -1370,8 +1397,10 @@ describe("Frontend command registry", () => {
       expect(listResult?.message).toContain("Local marketplace plugin")
       expect(showResult?.message).toContain("market-plugin")
       expect(dryRunResult?.message).toContain('"dryRun": true')
+      expect(wrongHashResult?.message).toContain("Manifest sha256 mismatch")
       expect(installResult?.message).toContain('"installed": true')
       expect(installResult?.message).toContain("trustedManifestHashes")
+      expect(requireTrustResult?.message).toContain('"installed": true')
       expect(installRemoteResult?.message).toContain('"remote": true')
       expect(installRemoteResult?.message).toContain("marketplace-lock.json")
       expect(removeResult?.message).toContain('"removed": true')
@@ -1381,7 +1410,7 @@ describe("Frontend command registry", () => {
       const lock = await readFile(join(homeDir, "plugins", "marketplace-lock.json"), "utf8")
       expect(lock).toContain("remote-plugin")
       expect(lock).toContain("manifestSha256")
-      expect(reloadCount).toBe(2)
+      expect(reloadCount).toBe(3)
     } finally {
       if (originalHome === undefined) {
         delete process.env.ONECLAW_HOME
@@ -2516,6 +2545,7 @@ describe("Frontend command registry", () => {
     const splitLookup = registry.lookup(`/swarm split ${name}`)
     const runLookup = registry.lookup(`/swarm run ${name}`)
     const statusLookup = registry.lookup(`/swarm status ${name}`)
+    const advanceLookup = registry.lookup(`/swarm advance ${name} ready for review`)
     const reviewLookup = registry.lookup(`/swarm review ${name} approved ready`)
     const reviewAutoLookup = registry.lookup(`/swarm review ${name} auto`)
     const mergeLookup = registry.lookup(`/swarm merge ${name} ready reviewed`)
@@ -2529,6 +2559,7 @@ describe("Frontend command registry", () => {
     const splitResult = await splitLookup?.command.handler(splitLookup.args, context)
     const runResult = await runLookup?.command.handler(runLookup.args, context)
     const statusResult = await statusLookup?.command.handler(statusLookup.args, context)
+    const advanceResult = await advanceLookup?.command.handler(advanceLookup.args, context)
     const reviewResult = await reviewLookup?.command.handler(reviewLookup.args, context)
     const reviewAutoResult = await reviewAutoLookup?.command.handler(reviewAutoLookup.args, context)
     const mergeResult = await mergeLookup?.command.handler(mergeLookup.args, context)
@@ -2548,6 +2579,7 @@ describe("Frontend command registry", () => {
     expect(created.every(item => item?.team === name)).toBe(true)
     expect(runResult?.message).toContain("\"status\": \"completed\"")
     expect(statusResult?.message).toContain("\"tasks\"")
+    expect(advanceResult?.message).toContain("\"lifecycle\"")
     expect(reviewResult?.message).toContain("\"approved\"")
     expect(reviewResult?.message).toContain("swarm-review")
     expect(reviewAutoResult?.message).toContain("auto review")

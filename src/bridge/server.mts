@@ -10,6 +10,7 @@ import {
   upsertChannel,
   type ChannelKind,
 } from "../channels/registry.mts"
+import { deliverChannelMessage, verifyChannelSignature } from "../channels/connectors.mts"
 import { loadConfig } from "../config.mts"
 import { KernelClient } from "../frontend/kernel-client.mts"
 import { TaskManager } from "../tasks/task-manager.mts"
@@ -544,6 +545,40 @@ export async function startBridgeServer() {
           ...recorded,
           task,
         }, 202)
+      }
+
+      if (
+        request.method === "POST" &&
+        parts.length === 3 &&
+        parts[0] === "channels" &&
+        parts[2] === "deliver"
+      ) {
+        const denied = requireScope("write")
+        if (denied) {
+          return denied
+        }
+        const body = await request.json().catch(() => ({})) as { messageId?: string }
+        if (!body.messageId) {
+          return json({ error: "messageId is required" }, 400)
+        }
+        return json(await deliverChannelMessage(config, body.messageId))
+      }
+
+      if (
+        request.method === "POST" &&
+        parts.length === 3 &&
+        parts[0] === "channels" &&
+        parts[2] === "verify"
+      ) {
+        const denied = requireScope("write")
+        if (denied) {
+          return denied
+        }
+        const body = await request.json().catch(() => ({})) as { signature?: string; payload?: string }
+        if (!body.signature || typeof body.payload !== "string") {
+          return json({ error: "signature and payload are required" }, 400)
+        }
+        return json(await verifyChannelSignature(config, parts[1], body.signature, body.payload))
       }
 
       if (request.method === "GET" && url.pathname === "/bridge/sessions") {

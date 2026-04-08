@@ -156,6 +156,7 @@ type UiPresentation = {
   profileKey: string
   mcpKey: string
   bridgeKey: string
+  observabilityKey: string
 }
 
 type SseFrame = {
@@ -302,6 +303,7 @@ export function resolveUiPresentation(runtimeState: RuntimeStateView): UiPresent
     profileKey: keybindings.profiles ?? keybindings.profile ?? "ctrl+t",
     mcpKey: keybindings.mcp ?? "ctrl+m",
     bridgeKey: keybindings.bridge ?? "ctrl+b",
+    observabilityKey: keybindings.observability ?? "ctrl+g",
   }
 }
 
@@ -607,6 +609,22 @@ export function buildArtifactPanelLines(snapshot: ArtifactSnapshot, mode: Artifa
     ]
   }
   return buildArtifactPanelEntries(snapshot).map(entry => entry.label)
+}
+
+export function buildObservabilityPanelLines(
+  runtimeState: RuntimeStateView,
+  usage: UsageView,
+  events: UiEvent[],
+): string[] {
+  const cost = Number(usage.estimatedCostUsd ?? runtimeState.estimatedCostUsd ?? 0)
+  const inputTokens = Number(usage.inputTokens ?? usage.totalInputTokens ?? runtimeState.totalInputTokens ?? 0)
+  const outputTokens = Number(usage.outputTokens ?? usage.totalOutputTokens ?? runtimeState.totalOutputTokens ?? 0)
+  return [
+    `cost $${cost.toFixed(4)} · tokens ${inputTokens}↓ ${outputTokens}↑`,
+    `provider ${runtimeState.provider ?? "unknown"} · profile ${runtimeState.activeProfile ?? "default"} · model ${runtimeState.model ?? "unknown"}`,
+    `sandbox ${runtimeState.sandbox?.enabled ? "enabled" : "disabled"} · available ${runtimeState.sandbox?.available ? "yes" : "no"}`,
+    ...events.slice(-6).map(event => `${event.at.slice(11, 19)} ${event.label}`),
+  ]
 }
 
 export function buildBridgePanelEntries(
@@ -1417,6 +1435,26 @@ function ArtifactPanel(props: {
   )
 }
 
+function ObservabilityPanel(props: {
+  runtimeState: RuntimeStateView
+  usage: UsageView
+  events: UiEvent[]
+}) {
+  const lines = buildObservabilityPanelLines(props.runtimeState, props.usage, props.events)
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={1}>
+      <Text bold>{"Observability"}</Text>
+      <Text dim>{"Ctrl+G toggle · /observability · /doctor bundle"}</Text>
+      <Text> </Text>
+      {lines.map((line, index) => (
+        <Text key={`observability-panel-${index}`} dim={index > 2} wrap="truncate-end">
+          {line}
+        </Text>
+      ))}
+    </Box>
+  )
+}
+
 function StatusBar(props: {
   runtimeState: RuntimeStateView
   usage: UsageView
@@ -1491,6 +1529,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
   const [artifactViewMode, setArtifactViewMode] = useState<ArtifactViewMode>("overview")
   const [artifactSelectionIndex, setArtifactSelectionIndex] = useState(0)
   const [artifactPanelVisible, setArtifactPanelVisible] = useState(false)
+  const [observabilityPanelVisible, setObservabilityPanelVisible] = useState(false)
   const approvalResolverRef = useRef<((allowed: boolean) => void) | null>(null)
   const bridgeViewModeRef = useRef<BridgeViewMode>("overview")
 
@@ -1808,6 +1847,13 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       setStatusLine("Artifacts panel toggled")
     })
     void refreshArtifactSnapshot()
+  })
+
+  const toggleObservabilityPanel = useEffectEvent(() => {
+    startTransition(() => {
+      setObservabilityPanelVisible(previous => !previous)
+      setStatusLine("Observability panel toggled")
+    })
   })
 
   const moveArtifactSelection = useEffectEvent((delta: 1 | -1) => {
@@ -2656,6 +2702,10 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       toggleArtifactPanel()
       return
     }
+    if (key.ctrl && input === "g") {
+      toggleObservabilityPanel()
+      return
+    }
     if (key.escape) {
       if (paletteOpen) {
         startTransition(() => {
@@ -2892,6 +2942,14 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         />
       ) : null}
 
+      {ready && observabilityPanelVisible ? (
+        <ObservabilityPanel
+          runtimeState={runtimeState}
+          usage={usage}
+          events={events}
+        />
+      ) : null}
+
       <StatusBar
         runtimeState={runtimeState}
         usage={usage}
@@ -2936,6 +2994,8 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
             {" bridge  "}
             <Text color={presentation.primaryColor}>{"ctrl+a"}</Text>
             {" artifacts  "}
+            <Text color={presentation.primaryColor}>{presentation.observabilityKey}</Text>
+            {" observability  "}
             <Text color={presentation.primaryColor}>{"[ ]"}</Text>
             {" pick  "}
             <Text color={presentation.primaryColor}>{"."}</Text>

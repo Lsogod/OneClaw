@@ -24,6 +24,7 @@ describe("TeamRegistry", () => {
     expect(team?.description).toBe("QA coverage")
     expect(team?.goal).toBe("review release")
     expect(team?.status).toBe("running")
+    expect(team?.lifecycle.stage).toBe("running")
     expect(team?.agents).toEqual(["session_1"])
     expect(team?.roles).toEqual({ session_1: "reviewer" })
     expect(team?.worktrees).toEqual({ session_1: "/tmp/worktrees/session_1" })
@@ -46,5 +47,26 @@ describe("TeamRegistry", () => {
 
     expect(snapshots[0]).toBe("")
     expect(snapshots[snapshots.length - 1]).toBe("ops-team")
+  })
+
+  test("advances explicit swarm lifecycle stages", () => {
+    const registry = new TeamRegistry()
+    registry.create("ship-team", "Ship", { goal: "ship release" })
+    expect(registry.get("ship-team")?.lifecycle.stage).toBe("created")
+
+    registry.setPlan("ship-team", ["inspect", "patch"])
+    expect(registry.get("ship-team")?.lifecycle.stage).toBe("planned")
+
+    registry.advance("ship-team")
+    expect(registry.get("ship-team")?.lifecycle.stage).toBe("running")
+
+    registry.advance("ship-team")
+    expect(registry.get("ship-team")?.lifecycle.stage).toBe("reviewing")
+
+    registry.setReview("ship-team", "approved", "ready")
+    expect(registry.get("ship-team")?.lifecycle.stage).toBe("ready_to_merge")
+
+    registry.advance("ship-team")
+    expect(registry.get("ship-team")?.lifecycle.stage).toBe("merged")
   })
 })

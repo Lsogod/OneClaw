@@ -11,6 +11,7 @@ import {
   buildMcpActionOptions,
   buildMcpPanelEntries,
   buildMcpPanelLines,
+  buildObservabilityPanelLines,
   extractSseFrames,
   resolveUiPresentation,
   resolveStatusBarStats,
@@ -280,6 +281,25 @@ describe("TUI view model", () => {
     ])
   })
 
+  test("observability panel lines expose usage and recent events", () => {
+    const lines = buildObservabilityPanelLines({
+      provider: "codex-subscription",
+      activeProfile: "codex-subscription",
+      model: "gpt-5.4",
+      sandbox: { enabled: true, available: true },
+    }, {
+      inputTokens: 10,
+      outputTokens: 5,
+      estimatedCostUsd: 0.0012,
+    }, [
+      { at: "2026-04-08T00:00:00Z", label: "tool finished" },
+    ])
+
+    expect(lines[0]).toContain("tokens 10↓ 5↑")
+    expect(lines[1]).toContain("gpt-5.4")
+    expect(lines.join("\n")).toContain("tool finished")
+  })
+
   test("TUI presentation consumes runtime theme and keybinding state with fallbacks", () => {
     expect(resolveUiPresentation({
       provider: "codex-subscription",
@@ -292,6 +312,7 @@ describe("TUI view model", () => {
         profile: "ctrl+t",
         mcp: "ctrl+m",
         bridge: "ctrl+b",
+        observability: "ctrl+g",
       },
     })).toEqual({
       primaryColor: "white",
@@ -302,6 +323,7 @@ describe("TUI view model", () => {
       profileKey: "ctrl+t",
       mcpKey: "ctrl+m",
       bridgeKey: "ctrl+b",
+      observabilityKey: "ctrl+g",
     })
     expect(resolveUiPresentation({ provider: "codex-subscription", activeProfile: "codex-subscription" }).submitKey).toBe("enter")
   })

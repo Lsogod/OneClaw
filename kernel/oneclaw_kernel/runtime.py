@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import html
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
@@ -1493,6 +1494,9 @@ class OneClawKernel:
         self.session_locks_lock = threading.Lock()
         self.active_processes: dict[str, subprocess.Popen[str]] = {}
         self.active_processes_lock = threading.Lock()
+        self.lsp_process: subprocess.Popen[str] | None = None
+        self.lsp_process_command: str | None = None
+        self.lsp_lock = threading.Lock()
         self.provider_event_context = threading.local()
         self.plugins = PluginRegistry(self.config)
         self.plugins.load(self.config.get("pluginDirs", []))
@@ -3571,6 +3575,8 @@ class OneClawKernel:
             "query": query,
             "limit": limit,
         }
+        if os.environ.get("ONECLAW_LSP_PERSISTENT") == "1" or os.environ.get("ONECLAW_LSP_MODE", "").strip().lower() in {"persistent", "stdio"}:
+            return self._external_lsp_persistent_query(command, payload, operation)
         try:
             completed = subprocess.run(
                 shlex.split(command, posix=os.name != "nt"),
@@ -3609,6 +3615,106 @@ class OneClawKernel:
             "command": command,
         }
         return result
+
+    def _external_lsp_persistent_query(
+        self,
+        command: str,
+        payload: dict[str, Any],
+        operation: str,
+    ) -> dict[str, Any] | None:
+        timeout_seconds = max(1, min(int(os.environ.get("ONECLAW_LSP_TIMEOUT_MS", "8000")) / 1000, 30))
+        try:
+            with self.lsp_lock:
+                process = self._ensure_lsp_process(command)
+                assert process.stdin is not None
+                assert process.stdout is not None
+                process.stdin.write(json.dumps(payload) + "\n")
+                process.stdin.flush()
+                response_queue: queue.Queue[str | BaseException | None] = queue.Queue(maxsize=1)
+
+                def read_response() -> None:
+                    try:
+                        response_queue.put(process.stdout.readline())
+                    except BaseException as error:
+                        response_queue.put(error)
+
+                reader = threading.Thread(target=read_response, daemon=True)
+                reader.start()
+                try:
+                    response = response_queue.get(timeout=timeout_seconds)
+                except queue.Empty as error:
+                    self._stop_lsp_process()
+                    raise RuntimeError("persistent LSP adapter timed out") from error
+                if isinstance(response, BaseException):
+                    self._stop_lsp_process()
+                    raise RuntimeError(f"persistent LSP adapter failed: {response}") from response
+                if not response:
+                    self._stop_lsp_process()
+                    raise RuntimeError("persistent LSP adapter closed stdout")
+        except Exception as error:
+            if os.environ.get("ONECLAW_LSP_STRICT") == "1":
+                raise RuntimeError(f"Persistent LSP adapter failed: {error}") from error
+            self.logger.warn(f"[lsp] persistent adapter unavailable; falling back to built-in scanner: {error}")
+            return None
+        try:
+            result = json.loads(response)
+        except json.JSONDecodeError as error:
+            if os.environ.get("ONECLAW_LSP_STRICT") == "1":
+                raise RuntimeError("Persistent LSP adapter returned invalid JSON") from error
+            self.logger.warn("[lsp] persistent adapter returned invalid JSON; falling back to built-in scanner")
+            return None
+        if not isinstance(result, dict):
+            if os.environ.get("ONECLAW_LSP_STRICT") == "1":
+                raise RuntimeError("Persistent LSP adapter returned a non-object JSON payload")
+            return None
+        result.setdefault("operation", operation)
+        result["adapter"] = {
+            "kind": "external-persistent",
+            "command": command,
+        }
+        return result
+
+    def _ensure_lsp_process(self, command: str) -> subprocess.Popen[str]:
+        if (
+            self.lsp_process is not None
+            and self.lsp_process.poll() is None
+            and self.lsp_process_command == command
+        ):
+            return self.lsp_process
+        self._stop_lsp_process()
+        self.lsp_process = subprocess.Popen(
+            shlex.split(command, posix=os.name != "nt"),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            cwd=self.cwd,
+        )
+        self.lsp_process_command = command
+        return self.lsp_process
+
+    def _stop_lsp_process(self) -> None:
+        process = self.lsp_process
+        self.lsp_process = None
+        self.lsp_process_command = None
+        if process is None:
+            return
+        try:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=2)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+        finally:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    if stream is not None:
+                        stream.close()
+                except Exception:
+                    pass
 
     def web_search(self, query: str, max_results: int = 5, timeout_ms: int = 10000) -> dict[str, Any]:
         search_query = query.strip()
@@ -4132,6 +4238,7 @@ class OneClawKernel:
         raise RuntimeError(f"Query loop exceeded the maximum number of iterations ({self._max_query_iterations()}).")
 
     def shutdown(self) -> None:
+        self._stop_lsp_process()
         for session in list(self.sessions.values()):
             try:
                 hook_payload = {

@@ -2,6 +2,16 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { mkdirSync } from "node:fs"
 
+export type TeamLifecycleStage =
+  | "created"
+  | "planned"
+  | "running"
+  | "reviewing"
+  | "ready_to_merge"
+  | "merged"
+  | "blocked"
+  | "failed"
+
 export type TeamRecord = {
   name: string
   description: string
@@ -20,6 +30,11 @@ export type TeamRecord = {
     updatedAt: string
   }
   status: "idle" | "running" | "completed" | "failed" | "cancelled"
+  lifecycle: {
+    stage: TeamLifecycleStage
+    note?: string
+    updatedAt: string
+  }
   createdAt: string
   updatedAt: string
   agents: string[]
@@ -60,6 +75,10 @@ export class TeamRegistry {
       roles: {},
       worktrees: {},
       status: "idle",
+      lifecycle: {
+        stage: options.plan?.length ? "planned" : "created",
+        updatedAt: now,
+      },
       createdAt: now,
       updatedAt: now,
       agents: [],
@@ -133,7 +152,7 @@ export class TeamRegistry {
   setPlan(name: string, plan: string[]): TeamRecord {
     const team = this.require(name)
     team.plan = [...plan]
-    team.updatedAt = new Date().toISOString()
+    this.setLifecycle(team, plan.length > 0 ? "planned" : "created")
     this.persist()
     this.emit()
     return team
@@ -147,6 +166,7 @@ export class TeamRegistry {
       updatedAt: new Date().toISOString(),
     }
     team.updatedAt = team.review.updatedAt
+    this.setLifecycle(team, status === "approved" ? "ready_to_merge" : status === "changes_requested" ? "blocked" : "reviewing", note)
     this.persist()
     this.emit()
     return team
@@ -160,6 +180,7 @@ export class TeamRegistry {
       updatedAt: new Date().toISOString(),
     }
     team.updatedAt = team.merge.updatedAt
+    this.setLifecycle(team, status === "merged" ? "merged" : status === "blocked" ? "blocked" : status === "ready" ? "ready_to_merge" : "reviewing", note)
     this.persist()
     this.emit()
     return team
@@ -169,10 +190,46 @@ export class TeamRegistry {
     const team = this.require(name)
     if (team.status !== status) {
       team.status = status
-      team.updatedAt = new Date().toISOString()
+      const stage = status === "running"
+        ? "running"
+        : status === "failed"
+          ? "failed"
+          : status === "cancelled"
+            ? "blocked"
+            : status === "completed"
+              ? "reviewing"
+              : team.lifecycle?.stage ?? "created"
+      this.setLifecycle(team, stage)
       this.persist()
       this.emit()
     }
+    return team
+  }
+
+  advance(name: string, note = ""): TeamRecord {
+    const team = this.require(name)
+    const current = team.lifecycle?.stage ?? "created"
+    const next = (() => {
+      if (current === "created") {
+        return team.plan.length > 0 ? "planned" : "created"
+      }
+      if (current === "planned") {
+        return "running"
+      }
+      if (current === "running") {
+        return "reviewing"
+      }
+      if (current === "reviewing") {
+        return team.review?.status === "approved" ? "ready_to_merge" : "reviewing"
+      }
+      if (current === "ready_to_merge") {
+        return "merged"
+      }
+      return current
+    })()
+    this.setLifecycle(team, next, note)
+    this.persist()
+    this.emit()
     return team
   }
 
@@ -191,6 +248,7 @@ export class TeamRegistry {
       status: team.status ?? "idle",
       createdAt: team.createdAt ?? new Date().toISOString(),
       updatedAt: team.updatedAt ?? new Date().toISOString(),
+      lifecycle: normalizeLifecycle(team),
       plan: [...(team.plan ?? [])],
       roles: { ...(team.roles ?? {}) },
       worktrees: { ...(team.worktrees ?? {}) },
@@ -231,6 +289,7 @@ export class TeamRegistry {
             review: team.review,
             merge: team.merge,
             status: team.status ?? "idle",
+            lifecycle: normalizeLifecycle(team),
             createdAt: team.createdAt ?? new Date().toISOString(),
             updatedAt: team.updatedAt ?? new Date().toISOString(),
             agents: [...(team.agents ?? [])],
@@ -270,4 +329,40 @@ export class TeamRegistry {
     }
     return team
   }
+
+  private setLifecycle(team: TeamRecord, stage: TeamLifecycleStage, note = ""): void {
+    const updatedAt = new Date().toISOString()
+    team.lifecycle = {
+      stage,
+      note: note || team.lifecycle?.note,
+      updatedAt,
+    }
+    team.updatedAt = updatedAt
+  }
+}
+
+function normalizeLifecycle(team: Partial<TeamRecord>): TeamRecord["lifecycle"] {
+  if (team.lifecycle?.stage) {
+    return {
+      stage: team.lifecycle.stage,
+      note: team.lifecycle.note,
+      updatedAt: team.lifecycle.updatedAt ?? team.updatedAt ?? new Date().toISOString(),
+    }
+  }
+  if (team.merge?.status === "merged") {
+    return { stage: "merged", note: team.merge.note, updatedAt: team.merge.updatedAt }
+  }
+  if (team.merge?.status === "ready") {
+    return { stage: "ready_to_merge", note: team.merge.note, updatedAt: team.merge.updatedAt }
+  }
+  if (team.review?.status === "approved") {
+    return { stage: "ready_to_merge", note: team.review.note, updatedAt: team.review.updatedAt }
+  }
+  if (team.status === "running") {
+    return { stage: "running", updatedAt: team.updatedAt ?? new Date().toISOString() }
+  }
+  if (team.plan?.length) {
+    return { stage: "planned", updatedAt: team.updatedAt ?? new Date().toISOString() }
+  }
+  return { stage: "created", updatedAt: team.updatedAt ?? new Date().toISOString() }
 }

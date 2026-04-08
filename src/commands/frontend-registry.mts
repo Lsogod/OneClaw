@@ -21,6 +21,7 @@ import {
   upsertChannel,
   type ChannelKind,
 } from "../channels/registry.mts"
+import { deliverChannelMessage, verifyChannelSignature } from "../channels/connectors.mts"
 import {
   findCommandSnippet,
   initCommandSnippet,
@@ -2887,6 +2888,12 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         const secretEnv = takeFlagValue(parts, ["--secret-env"]) ?? undefined
         const label = takeFlagValue(parts, ["--label"]) ?? undefined
         const webhookPath = takeFlagValue(parts, ["--webhook-path"]) ?? undefined
+        const deliveryUrl = takeFlagValue(parts, ["--delivery-url"]) ?? undefined
+        const chatId = takeFlagValue(parts, ["--chat-id"]) ?? undefined
+        const metadata = {
+          ...(deliveryUrl ? { deliveryUrl } : {}),
+          ...(chatId ? { chatId } : {}),
+        }
         return {
           message: pretty(await upsertChannel(config, {
             kind,
@@ -2894,6 +2901,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
             label,
             secretEnv,
             webhookPath,
+            metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
           })),
         }
       }
@@ -2903,16 +2911,34 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       if (action === "send" && parts[1]) {
-        const text = args.replace(/^send\s+\S+\s*/, "").trim()
+        const deliver = parts.includes("--deliver")
+        const text = args.replace(/^send\s+\S+\s*/, "").replace(/\s+--deliver\b/g, "").trim()
         if (!text) {
-          return { message: "Usage: /channels send <name> <message>" }
+          return { message: "Usage: /channels send <name> <message> [--deliver]" }
+        }
+        const recorded = await recordChannelMessage(config, {
+          channel: parts[1],
+          direction: "outbound",
+          text,
+        })
+        if (!deliver) {
+          return { message: pretty(recorded) }
+        }
+        return { message: pretty({ recorded, delivery: await deliverChannelMessage(config, recorded.message.id) }) }
+      }
+      if (action === "deliver" && parts[1]) {
+        return {
+          message: pretty(await deliverChannelMessage(config, parts[1])),
+        }
+      }
+      if (action === "verify" && parts[1] && parts[2]) {
+        const marker = args.indexOf("::")
+        const payload = marker >= 0 ? args.slice(marker + 2).trim() : parts.slice(3).join(" ")
+        if (!payload) {
+          return { message: "Usage: /channels verify <name> <signature> :: <payload>" }
         }
         return {
-          message: pretty(await recordChannelMessage(config, {
-            channel: parts[1],
-            direction: "outbound",
-            text,
-          })),
+          message: pretty(await verifyChannelSignature(config, parts[1], parts[2], payload)),
         }
       }
       if (action === "inbox") {
@@ -2938,7 +2964,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       return {
-        message: "Usage: /channels [list [query]|add <kind> <name> [--label <label>] [--secret-env <ENV>] [--webhook-path <path>]|remove <name>|send <name> <message>|inbox [query]|ack <message>|show <name>]",
+        message: "Usage: /channels [list [query]|add <kind> <name> [--label <label>] [--secret-env <ENV>] [--webhook-path <path>] [--delivery-url <url>] [--chat-id <id>]|remove <name>|send <name> <message> [--deliver]|deliver <message>|verify <name> <signature> :: <payload>|inbox [query]|ack <message>|show <name>]",
       }
     },
   })
@@ -3181,6 +3207,11 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           message: pretty(await swarmStatus(parts[1])),
         }
       }
+      if (action === "advance" && parts[1]) {
+        return {
+          message: pretty(commandTeamRegistry.advance(parts[1], args.split(/\s+/).slice(2).join(" ").trim())),
+        }
+      }
       if (action === "artifact" && parts[1]) {
         return {
           message: pretty(await createSwarmArtifact(context, parts[1], "swarm-status")),
@@ -3283,7 +3314,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
       }
       return {
-        message: "Usage: /swarm [list|create <name> <goal>|split <name>|plan <name> <task 1 :: task 2>|run <name>|status <name>|artifact <name>|review <name> <status|auto> [note]|merge <name> <status|summary> [note]|diff <name>|message <name> <message>|delete <name>]",
+        message: "Usage: /swarm [list|create <name> <goal>|split <name>|plan <name> <task 1 :: task 2>|run <name>|status <name>|advance <name> [note]|artifact <name>|review <name> <status|auto> [note]|merge <name> <status|summary> [note]|diff <name>|message <name> <message>|delete <name>]",
       }
     },
   })
@@ -4323,13 +4354,15 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
           const result = await installPluginFromMarketplace(config, context.cwd, parts[2], {
             trust: parts.includes("--trust"),
             dryRun: parts.includes("--dry-run"),
+            requireTrust: parts.includes("--require-trust"),
+            expectedSha256: takeFlagValue(parts, ["--sha256", "--require-hash"]) ?? undefined,
           })
           if (result.installed) {
             await context.client.reload()
           }
           return { message: pretty(result) }
         }
-        return { message: "Usage: /plugin marketplace [list [query]|init [project|user]|add <project|user> <name> <path-or-source> [description]|remove <project|user> <name>|show <name>|install <name> [--dry-run|--trust]]" }
+        return { message: "Usage: /plugin marketplace [list [query]|init [project|user]|add <project|user> <name> <path-or-source> [description]|remove <project|user> <name>|show <name>|install <name> [--dry-run|--trust|--require-trust|--sha256 <hash>]]" }
       }
       if (action === "install") {
         const sourcePath = args.replace(/^install\s+/, "").trim()

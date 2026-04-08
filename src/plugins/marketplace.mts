@@ -31,6 +31,8 @@ type PluginMarketplaceLockRecord = {
   manifestSha256: string
   installedAt: string
   trusted: boolean
+  trustRequired?: boolean
+  expectedSha256?: string
 }
 
 type PluginMarketplaceLockFile = {
@@ -209,7 +211,7 @@ export async function installPluginFromMarketplace(
   config: OneClawConfig,
   cwd: string,
   name: string,
-  options: { trust?: boolean; dryRun?: boolean } = {},
+  options: { trust?: boolean; dryRun?: boolean; requireTrust?: boolean; expectedSha256?: string } = {},
 ): Promise<Record<string, unknown>> {
   const entry = await findPluginMarketplaceEntry(config, cwd, name)
   if (!entry) {
@@ -230,6 +232,8 @@ export async function installPluginFromMarketplace(
       steps: [
         ...(remote ? [`clone ${entry.source} -> ${resolvedSource}`] : []),
         `audit ${resolvedSource}`,
+        ...(options.expectedSha256 ? [`verify manifest sha256 ${options.expectedSha256}`] : []),
+        ...(options.requireTrust ? ["require existing trust"] : []),
         `install ${entry.name}`,
         ...(options.trust ? [`trust ${entry.name}`] : []),
       ],
@@ -259,6 +263,26 @@ export async function installPluginFromMarketplace(
     }
   }
   const audit = await auditPlugin(config, resolvedSource)
+  if (options.expectedSha256 && audit.manifestSha256 !== options.expectedSha256) {
+    return {
+      installed: false,
+      entry,
+      remote,
+      resolvedSource,
+      audit,
+      error: `Manifest sha256 mismatch: expected ${options.expectedSha256}, got ${audit.manifestSha256}`,
+    }
+  }
+  if (options.requireTrust && !audit.trust.trusted && !options.trust) {
+    return {
+      installed: false,
+      entry,
+      remote,
+      resolvedSource,
+      audit,
+      error: "Plugin is not trusted. Use /plugin trust add <path> first, or pass --trust explicitly.",
+    }
+  }
   const trust = options.trust ? await trustPlugin(config, resolvedSource) : undefined
   const installed = await installPluginFromPath(config, resolvedSource)
   const lockPath = marketplaceLockPath(config)
@@ -275,7 +299,9 @@ export async function installPluginFromMarketplace(
       version: entry.version ?? audit.version,
       manifestSha256: audit.manifestSha256,
       installedAt: new Date().toISOString(),
-      trusted: Boolean(options.trust),
+      trusted: Boolean(options.trust) || audit.trust.trusted,
+      trustRequired: Boolean(options.requireTrust),
+      expectedSha256: options.expectedSha256,
     },
   }
   await writeJson(lockPath, lock)

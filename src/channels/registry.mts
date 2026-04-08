@@ -35,7 +35,7 @@ export type ChannelMessageRecord = {
   text: string
   threadId?: string
   sender?: string
-  status: "received" | "sent" | "acknowledged"
+  status: "received" | "sent" | "acknowledged" | "failed"
   createdAt: string
   metadata?: Record<string, unknown>
 }
@@ -110,6 +110,12 @@ export async function listChannels(config: OneClawConfig, query = "") {
   }
 }
 
+export async function getChannel(config: OneClawConfig, name: string): Promise<ChannelRecord | null> {
+  const channelName = slugify(name)
+  const store = await readStore(config)
+  return store.channels.find(channel => channel.name === channelName) ?? null
+}
+
 export async function upsertChannel(
   config: OneClawConfig,
   payload: {
@@ -178,7 +184,7 @@ export async function recordChannelMessage(
     text: string
     threadId?: string
     sender?: string
-    status?: "received" | "sent" | "acknowledged"
+    status?: ChannelMessageRecord["status"]
     metadata?: Record<string, unknown>
   },
 ) {
@@ -209,6 +215,47 @@ export async function recordChannelMessage(
   return {
     path,
     message,
+  }
+}
+
+export async function getChannelMessage(config: OneClawConfig, id: string): Promise<ChannelMessageRecord | null> {
+  const store = await readStore(config)
+  return store.messages.find(message => message.id === id) ?? null
+}
+
+export async function updateChannelMessage(
+  config: OneClawConfig,
+  id: string,
+  patch: {
+    status?: ChannelMessageRecord["status"]
+    metadata?: Record<string, unknown>
+  },
+): Promise<{ path: string; id: string; updated: boolean; message: ChannelMessageRecord | null }> {
+  const store = await readStore(config)
+  let updated: ChannelMessageRecord | null = null
+  const messages = store.messages.map(message => {
+    if (message.id !== id) {
+      return message
+    }
+    updated = {
+      ...message,
+      status: patch.status ?? message.status,
+      metadata: {
+        ...(message.metadata ?? {}),
+        ...(patch.metadata ?? {}),
+      },
+    }
+    return updated
+  })
+  const path = await writeStore(config, {
+    channels: store.channels,
+    messages,
+  })
+  return {
+    path,
+    id,
+    updated: Boolean(updated),
+    message: updated,
   }
 }
 

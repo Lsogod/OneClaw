@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { createHmac } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -9,6 +10,7 @@ const envKeys = [
   "ONECLAW_PROVIDER",
   "ONECLAW_BRIDGE_PORT",
   "ONECLAW_BRIDGE_TOKEN",
+  "ONECLAW_CHANNEL_SECRET",
 ] as const
 
 const envSnapshot = Object.fromEntries(envKeys.map(key => [key, process.env[key]])) as Record<string, string | undefined>
@@ -57,7 +59,6 @@ describe("bridge streaming", () => {
     process.env.ONECLAW_HOME = homeDir
     process.env.ONECLAW_PROVIDER = "internal-test"
     process.env.ONECLAW_BRIDGE_PORT = "0"
-
     const server = await startBridgeServer()
     try {
       const baseUrl = `http://${server.hostname}:${server.port}`
@@ -247,6 +248,8 @@ describe("bridge streaming", () => {
     process.env.ONECLAW_HOME = homeDir
     process.env.ONECLAW_PROVIDER = "internal-test"
     process.env.ONECLAW_BRIDGE_PORT = "0"
+    const channelSecretEnv = `ONECLAW_CHANNEL_SECRET_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    process.env[channelSecretEnv] = "bridge-channel-secret"
 
     const server = await startBridgeServer()
     try {
@@ -260,7 +263,7 @@ describe("bridge streaming", () => {
           name: "release-room",
           kind: "slack",
           label: "Release Room",
-          secretEnv: "SLACK_TOKEN",
+          secretEnv: channelSecretEnv,
         }),
       })
       expect(addResponse.ok).toBe(true)
@@ -296,6 +299,21 @@ describe("bridge streaming", () => {
       expect(messages.count).toBe(1)
       expect(messages.messages[0]?.text).toBe("ship it")
 
+      const signature = createHmac("sha256", "bridge-channel-secret").update("bridge payload").digest("hex")
+      const verifyResponse = await fetch(`${baseUrl}/channels/release-room/verify`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          signature: `sha256=${signature}`,
+          payload: "bridge payload",
+        }),
+      })
+      expect(verifyResponse.ok).toBe(true)
+      const verified = await verifyResponse.json() as { verified: boolean }
+      expect(verified.verified).toBe(true)
+
       const removeResponse = await fetch(`${baseUrl}/channels/release-room`, {
         method: "DELETE",
       })
@@ -304,6 +322,7 @@ describe("bridge streaming", () => {
       expect(removed.removed).toBe(true)
     } finally {
       server.stop()
+      delete process.env[channelSecretEnv]
       restoreEnv()
     }
   })
