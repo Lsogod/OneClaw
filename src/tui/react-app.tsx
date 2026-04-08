@@ -1572,24 +1572,22 @@ function PromptInputBox(props: {
   presentation: UiPresentation
 }) {
   const borderColor = resolvePromptInputBorderColor(props.running, props.presentation)
+  const rule = "─".repeat(96)
   return (
-    <Box
-      borderStyle="round"
-      borderColor={borderColor}
-      width="100%"
-      paddingX={1}
-      paddingY={0}
-      marginTop={1}
-    >
-      {props.running ? (
-        <Text color="yellow" bold>{"● "}</Text>
-      ) : (
-        <Text color={props.presentation.primaryColor} bold>{"> "}</Text>
-      )}
-      <Text>{props.inputBuffer}</Text>
-      {!props.running && !props.inputBuffer ? (
-        <Text color={props.presentation.mutedColor}>{"Type a prompt or slash command..."}</Text>
-      ) : null}
+    <Box flexDirection="column" marginTop={1}>
+      <Text color={borderColor}>{rule}</Text>
+      <Box>
+        {props.running ? (
+          <Text color="yellow" bold>{"● "}</Text>
+        ) : (
+          <Text color={props.presentation.primaryColor} bold>{"> "}</Text>
+        )}
+        <Text>{props.inputBuffer}</Text>
+        {!props.running && !props.inputBuffer ? (
+          <Text color={props.presentation.mutedColor}>{"Type a prompt or slash command..."}</Text>
+        ) : null}
+      </Box>
+      <Text color={borderColor}>{rule}</Text>
     </Box>
   )
 }
