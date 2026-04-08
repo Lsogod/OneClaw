@@ -117,6 +117,15 @@ class KernelRuntimeTests(unittest.TestCase):
                 "export class OneClawApp {}\nexport function runOneClaw() {}\n",
                 "utf-8",
             )
+            Path(root, "module.py").write_text(
+                "class OneClawRuntime:\n"
+                "    \"\"\"Runtime docs.\"\"\"\n"
+                "    def run(self):\n"
+                "        return helper()\n\n"
+                "def helper():\n"
+                "    return 'ok'\n",
+                "utf-8",
+            )
             session = kernel.create_session(root)
 
             globbed = kernel._execute_tool({"name": "glob_files", "input": {"pattern": "*.md"}}, session)
@@ -132,6 +141,12 @@ class KernelRuntimeTests(unittest.TestCase):
             symbol_tool = kernel._execute_tool({
                 "name": "code_symbols",
                 "input": {"query": "runOneClaw", "limit": 10},
+            }, session)
+            lsp_workspace = kernel.lsp_query("workspace_symbol", query="OneClawRuntime", limit=10)
+            lsp_hover = kernel.lsp_query("hover", file_path="module.py", symbol="helper", limit=10)
+            lsp_tool = kernel._execute_tool({
+                "name": "lsp",
+                "input": {"operation": "find_references", "filePath": "module.py", "symbol": "helper", "limit": 10},
             }, session)
             tool_search = kernel._execute_tool({
                 "name": "tool_search",
@@ -160,6 +175,10 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertEqual(symbols["symbols"][0]["name"], "OneClawApp")
             self.assertTrue(symbol_tool["ok"])
             self.assertIn("runOneClaw", symbol_tool["output"])
+            self.assertEqual(lsp_workspace["results"][0]["name"], "OneClawRuntime")
+            self.assertEqual(lsp_hover["result"]["name"], "helper")
+            self.assertTrue(lsp_tool["ok"])
+            self.assertIn("helper", lsp_tool["output"])
             self.assertTrue(tool_search["ok"])
             self.assertIn("cron_create", tool_search["output"])
             self.assertTrue(cron_created["ok"])

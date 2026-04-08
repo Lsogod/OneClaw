@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import base64
 from datetime import datetime, timedelta, timezone
 import html
@@ -272,6 +273,100 @@ SYMBOL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 
 IGNORED_SYMBOL_DIRS = {".git", ".hg", ".svn", ".venv", "__pycache__", "dist", "node_modules", "release", "target"}
+
+
+def iter_python_files(root: Path) -> list[Path]:
+    if root.is_file():
+        return [root] if root.suffix == ".py" else []
+    files = [
+        path
+        for path in root.rglob("*.py")
+        if path.is_file()
+        and not any(part in IGNORED_SYMBOL_DIRS for part in path.parts)
+    ]
+    return sorted(files)
+
+
+def _python_signature(node: ast.AST) -> str:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        args = [arg.arg for arg in node.args.args]
+        prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+        return f"{prefix} {node.name}({', '.join(args)})"
+    if isinstance(node, ast.ClassDef):
+        return f"class {node.name}"
+    if isinstance(node, ast.Assign):
+        return "assignment"
+    return ""
+
+
+def collect_python_lsp_symbols(path: Path, cwd: str, parent: str | None = None) -> list[dict[str, Any]]:
+    try:
+        source = path.read_text("utf-8")
+        tree = ast.parse(source, filename=str(path))
+        lines = source.splitlines()
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return []
+    symbols: list[dict[str, Any]] = []
+
+    def visit(node: ast.AST, current_parent: str | None) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = f"{current_parent}.{child.name}" if current_parent else child.name
+                symbols.append({
+                    "name": name,
+                    "kind": "class" if isinstance(child, ast.ClassDef) else "function",
+                    "file": display_path(cwd, str(path)),
+                    "line": child.lineno,
+                    "character": child.col_offset + 1,
+                    "signature": _python_signature(child),
+                    "docstring": ast.get_docstring(child) or "",
+                    "text": lines[child.lineno - 1].strip() if 0 <= child.lineno - 1 < len(lines) else "",
+                })
+                visit(child, name)
+            elif isinstance(child, ast.Assign):
+                for target in child.targets:
+                    if isinstance(target, ast.Name):
+                        name = f"{current_parent}.{target.id}" if current_parent else target.id
+                        symbols.append({
+                            "name": name,
+                            "kind": "variable",
+                            "file": display_path(cwd, str(path)),
+                            "line": target.lineno,
+                            "character": target.col_offset + 1,
+                            "signature": f"{target.id} = ...",
+                            "docstring": "",
+                            "text": lines[target.lineno - 1].strip() if 0 <= target.lineno - 1 < len(lines) else "",
+                        })
+                visit(child, current_parent)
+            else:
+                visit(child, current_parent)
+
+    visit(tree, parent)
+    return symbols
+
+
+def extract_identifier_at_position(path: Path, line: int | None = None, character: int | None = None) -> str | None:
+    if line is None:
+        return None
+    try:
+        lines = path.read_text("utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if line < 1 or line > len(lines):
+        return None
+    text = lines[line - 1]
+    if not text:
+        return None
+    index = max(0, min((character or 1) - 1, max(0, len(text) - 1)))
+    for match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", text):
+        if match.start() <= index < match.end():
+            return match.group(0)
+    fallback = re.search(r"[A-Za-z_][A-Za-z0-9_]*", text)
+    return fallback.group(0) if fallback else None
+
+
+def symbol_name_matches(candidate: str, target: str) -> bool:
+    return candidate == target or candidate.endswith(f".{target}")
 
 
 def collect_code_symbols(root: str, cwd: str, query: str = "", limit: int = 200) -> list[dict[str, Any]]:
@@ -2630,6 +2725,24 @@ class OneClawKernel:
                 },
             },
             {
+                "name": "lsp",
+                "description": "Run lightweight Python code-intelligence operations: symbols, definition, references, and hover.",
+                "readOnly": True,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["operation"],
+                    "properties": {
+                        "operation": {"type": "string"},
+                        "filePath": {"type": "string"},
+                        "symbol": {"type": "string"},
+                        "line": {"type": "number"},
+                        "character": {"type": "number"},
+                        "query": {"type": "string"},
+                        "limit": {"type": "number"},
+                    },
+                },
+            },
+            {
                 "name": "web_fetch",
                 "description": "Fetch a HTTP(S) URL and return readable text content.",
                 "readOnly": True,
@@ -2789,9 +2902,11 @@ class OneClawKernel:
         candidate_paths = []
         if isinstance(input_payload.get("path"), str):
             candidate_paths.append(os.path.realpath(os.path.join(session["cwd"], input_payload["path"])))
+        if isinstance(input_payload.get("filePath"), str):
+            candidate_paths.append(os.path.realpath(os.path.join(session["cwd"], input_payload["filePath"])))
         if isinstance(input_payload.get("cwd"), str):
             candidate_paths.append(os.path.realpath(os.path.join(session["cwd"], input_payload["cwd"])))
-        if tool_name in {"list_files", "read_file", "search_files", "glob_files", "run_shell", "workspace_status", "code_symbols"} and not candidate_paths:
+        if tool_name in {"list_files", "read_file", "search_files", "glob_files", "run_shell", "workspace_status", "code_symbols", "lsp"} and not candidate_paths:
             candidate_paths.append(session["cwd"])
         for candidate in candidate_paths:
             if not is_inside_roots(candidate, self._permission_roots()):
@@ -3078,6 +3193,132 @@ class OneClawKernel:
             "symbols": symbols,
         }
 
+    def lsp_query(
+        self,
+        operation: str,
+        file_path: str | None = None,
+        symbol: str | None = None,
+        line: int | None = None,
+        character: int | None = None,
+        query: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        root = Path(self.cwd).resolve()
+        bounded_limit = max(1, min(int(limit or 100), 500))
+        normalized_operation = operation.strip() or "workspace_symbol"
+        allowed_operations = {"document_symbol", "workspace_symbol", "go_to_definition", "find_references", "hover"}
+        if normalized_operation not in allowed_operations:
+            raise RuntimeError("Unsupported lsp operation. Use document_symbol, workspace_symbol, go_to_definition, find_references, or hover.")
+        target_path = Path(file_path).expanduser() if file_path else root
+        if not target_path.is_absolute():
+            target_path = (root / target_path).resolve()
+        else:
+            target_path = target_path.resolve()
+        if not is_inside_roots(str(target_path), self._permission_roots()):
+            raise RuntimeError(f"LSP path outside writable roots: {target_path}")
+
+        if normalized_operation == "workspace_symbol":
+            needle = (query or symbol or "").strip().lower()
+            if not needle:
+                raise RuntimeError("workspace_symbol requires query")
+            matches: list[dict[str, Any]] = []
+            for candidate in iter_python_files(root):
+                for item in collect_python_lsp_symbols(candidate, self.cwd):
+                    if needle in str(item["name"]).lower():
+                        matches.append(item)
+                        if len(matches) >= bounded_limit:
+                            return {
+                                "operation": normalized_operation,
+                                "query": query or symbol,
+                                "count": len(matches),
+                                "results": matches,
+                            }
+            return {
+                "operation": normalized_operation,
+                "query": query or symbol,
+                "count": len(matches),
+                "results": matches,
+            }
+
+        if not target_path.exists():
+            raise RuntimeError(f"LSP file not found: {file_path}")
+        if target_path.suffix != ".py":
+            raise RuntimeError("The lsp operation currently supports Python files only.")
+
+        if normalized_operation == "document_symbol":
+            symbols = collect_python_lsp_symbols(target_path, self.cwd)[:bounded_limit]
+            return {
+                "operation": normalized_operation,
+                "file": display_path(self.cwd, str(target_path)),
+                "count": len(symbols),
+                "results": symbols,
+            }
+
+        target_symbol = (symbol or extract_identifier_at_position(target_path, line, character) or "").strip()
+        if not target_symbol:
+            raise RuntimeError(f"{normalized_operation} requires symbol or line")
+
+        if normalized_operation == "go_to_definition":
+            matches = []
+            for candidate in iter_python_files(root):
+                for item in collect_python_lsp_symbols(candidate, self.cwd):
+                    if symbol_name_matches(str(item["name"]), target_symbol):
+                        matches.append(item)
+                        if len(matches) >= bounded_limit:
+                            break
+                if len(matches) >= bounded_limit:
+                    break
+            return {
+                "operation": normalized_operation,
+                "symbol": target_symbol,
+                "count": len(matches),
+                "results": matches,
+            }
+
+        if normalized_operation == "find_references":
+            pattern = re.compile(rf"\b{re.escape(target_symbol)}\b")
+            references: list[dict[str, Any]] = []
+            for candidate in iter_python_files(root):
+                try:
+                    lines = candidate.read_text("utf-8").splitlines()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                for line_number, text in enumerate(lines, start=1):
+                    if pattern.search(text):
+                        references.append({
+                            "file": display_path(self.cwd, str(candidate)),
+                            "line": line_number,
+                            "text": text.strip(),
+                        })
+                        if len(references) >= bounded_limit:
+                            return {
+                                "operation": normalized_operation,
+                                "symbol": target_symbol,
+                                "count": len(references),
+                                "results": references,
+                            }
+            return {
+                "operation": normalized_operation,
+                "symbol": target_symbol,
+                "count": len(references),
+                "results": references,
+            }
+
+        if normalized_operation == "hover":
+            definitions = self.lsp_query(
+                "go_to_definition",
+                file_path=str(target_path),
+                symbol=target_symbol,
+                limit=1,
+            )
+            return {
+                "operation": normalized_operation,
+                "symbol": target_symbol,
+                "result": (definitions.get("results") or [None])[0],
+            }
+
+        raise RuntimeError("Unsupported lsp operation. Use document_symbol, workspace_symbol, go_to_definition, find_references, or hover.")
+
     def web_search(self, query: str, max_results: int = 5, timeout_ms: int = 10000) -> dict[str, Any]:
         search_query = query.strip()
         if not search_query:
@@ -3262,6 +3503,21 @@ class OneClawKernel:
                     "symbols": symbols,
                 }, indent=2),
             }
+        if name == "lsp":
+            operation = str(input_payload.get("operation") or "")
+            try:
+                result = self.lsp_query(
+                    operation,
+                    input_payload.get("filePath") if isinstance(input_payload.get("filePath"), str) else None,
+                    input_payload.get("symbol") if isinstance(input_payload.get("symbol"), str) else None,
+                    int(input_payload["line"]) if input_payload.get("line") is not None else None,
+                    int(input_payload["character"]) if input_payload.get("character") is not None else None,
+                    input_payload.get("query") if isinstance(input_payload.get("query"), str) else None,
+                    int(input_payload.get("limit") or 100),
+                )
+                return {"ok": True, "output": json.dumps(result, indent=2)}
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
         if name == "web_fetch":
             url = input_payload.get("url")
             if not isinstance(url, str) or not url.strip():

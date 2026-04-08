@@ -313,6 +313,19 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
         text: "class OneClawRuntime {}",
       }].slice(0, options?.limit ?? 200),
     }),
+    lsp: async (options: Record<string, unknown>) => ({
+      operation: options.operation,
+      query: options.query,
+      file: options.filePath,
+      symbol: options.symbol,
+      count: 1,
+      results: [{
+        name: options.symbol ?? options.query ?? "OneClawRuntime",
+        kind: "class",
+        file: options.filePath ?? "src/runtime.py",
+        line: 3,
+      }],
+    }),
     webSearch: async (query: string, options?: { maxResults?: number }) => ({
       query,
       url: `https://search.example/?q=${encodeURIComponent(query)}`,
@@ -401,6 +414,7 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/diff")
     expect(helpText).toContain("/files")
     expect(helpText).toContain("/symbols")
+    expect(helpText).toContain("/lsp")
     expect(helpText).toContain("/fetch")
     expect(helpText).toContain("/search-web")
     expect(helpText).toContain("/todo")
@@ -1590,9 +1604,11 @@ describe("Frontend command registry", () => {
     expect(result?.message).toContain("src/index.ts")
   })
 
-  test("symbols, fetch, web search, and todo commands use kernel-backed management RPCs", async () => {
+  test("symbols, lsp, fetch, web search, and todo commands use kernel-backed management RPCs", async () => {
     const registry = createFrontendCommandRegistry()
     const symbolsLookup = registry.lookup("/symbols OneClaw --path src --limit 5")
+    const lspWorkspaceLookup = registry.lookup("/lsp workspace OneClaw --limit 5")
+    const lspDefinitionLookup = registry.lookup("/lsp definition src/runtime.py OneClawRuntime")
     const fetchLookup = registry.lookup("/fetch https://example.test/page 1200")
     const searchLookup = registry.lookup("/search-web oneclaw harness --limit 1")
     const todoListLookup = registry.lookup("/todo")
@@ -1618,6 +1634,8 @@ describe("Frontend command registry", () => {
     } as never
 
     const symbolsResult = await symbolsLookup?.command.handler(symbolsLookup.args, context)
+    const lspWorkspaceResult = await lspWorkspaceLookup?.command.handler(lspWorkspaceLookup.args, context)
+    const lspDefinitionResult = await lspDefinitionLookup?.command.handler(lspDefinitionLookup.args, context)
     const fetchResult = await fetchLookup?.command.handler(fetchLookup.args, context)
     const searchResult = await searchLookup?.command.handler(searchLookup.args, context)
     const listResult = await todoListLookup?.command.handler(todoListLookup.args, context)
@@ -1627,6 +1645,9 @@ describe("Frontend command registry", () => {
 
     expect(symbolsResult?.message).toContain("OneClawRuntime")
     expect(symbolsResult?.message).toContain("src/runtime.ts")
+    expect(lspWorkspaceResult?.message).toContain("workspace_symbol")
+    expect(lspDefinitionResult?.message).toContain("go_to_definition")
+    expect(lspDefinitionResult?.message).toContain("OneClawRuntime")
     expect(fetchResult?.message).toContain("https://example.test/page")
     expect(fetchResult?.message).toContain("fetched")
     expect(searchResult?.message).toContain("oneclaw harness")

@@ -212,6 +212,16 @@ def main() -> int:
                     str(params.get("query") or ""),
                     int(params.get("limit") or 200),
                 )
+            elif method == "lsp":
+                result = kernel.lsp_query(
+                    str(params.get("operation") or ""),
+                    params.get("filePath"),
+                    params.get("symbol"),
+                    int(params["line"]) if params.get("line") is not None else None,
+                    int(params["character"]) if params.get("character") is not None else None,
+                    params.get("query"),
+                    int(params.get("limit") or 100),
+                )
             elif method == "web_search":
                 result = kernel.web_search(
                     params["query"],

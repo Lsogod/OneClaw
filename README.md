@@ -407,6 +407,7 @@ bun run sandbox:smoke
 | `/cron` | 管理 OpenHarness 风格的本地 cron job registry |
 | `/todo` | 管理当前 session 的 todo 状态 |
 | `/symbols` | 通过 kernel `code_symbols` 索引或搜索代码符号 |
+| `/lsp` | 运行轻量 Python code-intelligence：symbol、definition、references、hover |
 | `/fetch` | 通过 kernel `web_fetch` 读取 HTTP(S) URL |
 | `/search-web` | 通过 kernel `web_search` 搜索网页 |
 | `/mcp` | 管理 MCP |
@@ -483,6 +484,7 @@ OneClaw 借鉴了 OpenHarness 中最值得保留的 harness 设计：
 - command registry
 - tools/MCP/plugin/skills/memory 分层
 - tool discovery 与本地 cron job registry
+- lightweight LSP/code-intelligence 入口
 - permission、hooks、sandbox、budget 治理
 - session/resume/export/compact
 - bridge、tasks、team/swarm 控制面
@@ -506,6 +508,7 @@ OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
 - MCP dynamic add/remove/reconnect/read/templates
 - plugin lifecycle
 - tool search 与本地 cron registry
+- lightweight Python LSP/code-intelligence
 - memory/session 管理
 - task/team/swarm 基础生命周期
 - sandbox fallback smoke

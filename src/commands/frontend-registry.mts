@@ -2359,6 +2359,86 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   })
 
   registry.register({
+    name: "lsp",
+    description: "Run lightweight Python code-intelligence operations",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts.shift() ?? "workspace"
+      let limit = 100
+      const limitValue = takeFlagValue(parts, ["--limit", "-n"])
+      if (limitValue !== null) {
+        const parsed = Number.parseInt(limitValue, 10)
+        if (!Number.isFinite(parsed) || parsed < 1 || parsed > 500) {
+          return { message: "Usage: /lsp <workspace|document|definition|references|hover> ... [--limit 1-500]" }
+        }
+        limit = parsed
+      }
+      const lineValue = takeFlagValue(parts, ["--line"])
+      const characterValue = takeFlagValue(parts, ["--character", "--char"])
+      const line = lineValue ? Number.parseInt(lineValue, 10) : undefined
+      const character = characterValue ? Number.parseInt(characterValue, 10) : undefined
+      if ((lineValue && (line === undefined || !Number.isFinite(line) || line < 1)) || (characterValue && (character === undefined || !Number.isFinite(character) || character < 1))) {
+        return { message: "Usage: /lsp <workspace|document|definition|references|hover> ... [--line <n>] [--character <n>]" }
+      }
+      const position = {
+        ...(line !== undefined ? { line } : {}),
+        ...(character !== undefined ? { character } : {}),
+      }
+
+      if (action === "workspace" || action === "workspace_symbol") {
+        const query = parts.join(" ").trim()
+        if (!query) {
+          return { message: "Usage: /lsp workspace <query> [--limit 1-500]" }
+        }
+        return {
+          message: pretty(await context.client.lsp({ operation: "workspace_symbol", query, limit })),
+        }
+      }
+      if (action === "document" || action === "document_symbol") {
+        if (!parts[0]) {
+          return { message: "Usage: /lsp document <file.py> [--limit 1-500]" }
+        }
+        return {
+          message: pretty(await context.client.lsp({ operation: "document_symbol", filePath: parts[0], limit })),
+        }
+      }
+      if (action === "definition" || action === "go_to_definition") {
+        const filePath = parts[0]
+        const symbol = parts[1]
+        if (!filePath || (!symbol && !position.line)) {
+          return { message: "Usage: /lsp definition <file.py> <symbol>|--line <n> [--character <n>]" }
+        }
+        return {
+          message: pretty(await context.client.lsp({ operation: "go_to_definition", filePath, symbol, ...position, limit })),
+        }
+      }
+      if (action === "references" || action === "find_references") {
+        const filePath = parts[0]
+        const symbol = parts[1]
+        if (!filePath || (!symbol && !position.line)) {
+          return { message: "Usage: /lsp references <file.py> <symbol>|--line <n> [--character <n>]" }
+        }
+        return {
+          message: pretty(await context.client.lsp({ operation: "find_references", filePath, symbol, ...position, limit })),
+        }
+      }
+      if (action === "hover") {
+        const filePath = parts[0]
+        const symbol = parts[1]
+        if (!filePath || (!symbol && !position.line)) {
+          return { message: "Usage: /lsp hover <file.py> <symbol>|--line <n> [--character <n>]" }
+        }
+        return {
+          message: pretty(await context.client.lsp({ operation: "hover", filePath, symbol, ...position, limit })),
+        }
+      }
+      return {
+        message: "Usage: /lsp workspace <query> | /lsp document <file.py> | /lsp definition <file.py> <symbol> | /lsp references <file.py> <symbol> | /lsp hover <file.py> <symbol>",
+      }
+    },
+  })
+
+  registry.register({
     name: "fetch",
     description: "Fetch a HTTP(S) URL through the kernel web_fetch tool",
     handler: async (args, context) => {

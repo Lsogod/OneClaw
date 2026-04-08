@@ -418,6 +418,18 @@ export class KernelClient {
     }>("code_symbols", options)
   }
 
+  lsp(options: {
+    operation: "document_symbol" | "workspace_symbol" | "go_to_definition" | "find_references" | "hover"
+    filePath?: string
+    symbol?: string
+    line?: number
+    character?: number
+    query?: string
+    limit?: number
+  }) {
+    return this.request<Record<string, unknown>>("lsp", options)
+  }
+
   webSearch(query: string, options: { maxResults?: number; timeoutMs?: number } = {}) {
     return this.request<{
       query: string
