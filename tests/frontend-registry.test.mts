@@ -1158,6 +1158,68 @@ describe("Frontend command registry", () => {
     expect(showResult?.message).toContain("Always verify before release.")
   })
 
+  test("skills managed commands create, list, show, and remove local skills", async () => {
+    const originalHome = process.env.ONECLAW_HOME
+    const homeDir = join(tmpdir(), `oneclaw-skills-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const workspace = join(tmpdir(), `oneclaw-skills-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    process.env.ONECLAW_HOME = homeDir
+    await mkdir(workspace, { recursive: true })
+
+    try {
+      const registry = createFrontendCommandRegistry()
+      let reloadCount = 0
+      const context = {
+        client: createFakeClient({
+          reload: async () => {
+            reloadCount += 1
+            return {
+              provider: "codex-subscription",
+              activeProfile: "codex-subscription",
+            }
+          },
+        }),
+        sessionId: "session_current",
+        cwd: workspace,
+      } as never
+
+      const init = registry.lookup("/skills init workspace-rules")
+      const addProject = registry.lookup("/skills add project ReleaseSkill :: Always run release checks.")
+      const addUser = registry.lookup("/skills add user PersonalSkill :: Prefer concise output.")
+      const managed = registry.lookup("/skills managed")
+      const show = registry.lookup("/skills managed show ReleaseSkill")
+      const search = registry.lookup("/skills managed search concise")
+      const remove = registry.lookup("/skills remove project ReleaseSkill")
+
+      const initResult = await init?.command.handler(init.args, context)
+      const addProjectResult = await addProject?.command.handler(addProject.args, context)
+      const addUserResult = await addUser?.command.handler(addUser.args, context)
+      const managedResult = await managed?.command.handler(managed.args, context)
+      const showResult = await show?.command.handler(show.args, context)
+      const searchResult = await search?.command.handler(search.args, context)
+      const removeResult = await remove?.command.handler(remove.args, context)
+
+      expect(initResult?.message).toContain("workspace-rules")
+      expect(addProjectResult?.message).toContain("ReleaseSkill")
+      expect(addUserResult?.message).toContain("PersonalSkill")
+      expect(managedResult?.message).toContain("workspace-rules")
+      expect(managedResult?.message).toContain("ReleaseSkill")
+      expect(managedResult?.message).toContain("PersonalSkill")
+      expect(showResult?.message).toContain("Always run release checks.")
+      expect(searchResult?.message).toContain("PersonalSkill")
+      expect(removeResult?.message).toContain('"removed": true')
+      expect(existsSync(join(workspace, "skills", "workspace-rules.md"))).toBe(true)
+      expect(existsSync(join(workspace, "skills", "releaseskill.md"))).toBe(false)
+      expect(existsSync(join(homeDir, "skills", "personalskill.md"))).toBe(true)
+      expect(reloadCount).toBe(4)
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ONECLAW_HOME
+      } else {
+        process.env.ONECLAW_HOME = originalHome
+      }
+    }
+  })
+
   test("commands snippets list, show, run, and initialize custom project commands", async () => {
     const originalHome = process.env.ONECLAW_HOME
     const homeDir = join(tmpdir(), `oneclaw-commands-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)

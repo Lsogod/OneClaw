@@ -27,6 +27,14 @@ import {
   updatePlugin,
   validatePluginDirectory,
 } from "../plugins/installer.mts"
+import {
+  addSkill,
+  initSkill,
+  listManagedSkills,
+  removeSkill,
+  showManagedSkill,
+  type SkillScope,
+} from "../skills/manager.mts"
 import { TaskManager } from "../tasks/task-manager.mts"
 import { appendText, ensureDir, expandHome, limitText, readTextIfExists, slugify, writeText } from "../utils.mts"
 
@@ -3250,14 +3258,74 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
 
   registry.register({
     name: "skills",
-    description: "Show discovered skills or reload the runtime",
+    description: "Show, create, remove, or reload skills",
     handler: async (args, context) => {
       const parts = words(args)
       const action = parts[0] ?? ""
+      const usage = "Usage: /skills [reload|search <query>|show <name>|managed [list|show <name>|search <query>]|init [name]|add <project|user> <name> :: <content>|remove <project|user> <name>]"
       if (action === "reload") {
         await context.client.reload()
         return {
           message: pretty(await context.client.skills()),
+        }
+      }
+      if (action === "managed" || action === "local") {
+        const config = await loadConfig(context.cwd)
+        const subcommand = parts[1] ?? "list"
+        if (subcommand === "list") {
+          return {
+            message: pretty(await listManagedSkills(config, context.cwd)),
+          }
+        }
+        if (subcommand === "search" && parts[2]) {
+          return {
+            message: pretty(await listManagedSkills(config, context.cwd, {
+              query: parts.slice(2).join(" "),
+            })),
+          }
+        }
+        if (subcommand === "show" && parts[2]) {
+          return {
+            message: pretty(await showManagedSkill(config, context.cwd, parts.slice(2).join(" "))),
+          }
+        }
+        return { message: usage }
+      }
+      if (action === "init") {
+        const result = await initSkill(context.cwd, parts[1] ?? "project-context")
+        await context.client.reload()
+        return {
+          message: pretty(result),
+        }
+      }
+      if (action === "add") {
+        const match = args.match(/^add\s+(project|user)\s+([\s\S]+?)\s+::\s*([\s\S]+)$/i)
+        if (!match) {
+          return { message: usage }
+        }
+        const config = await loadConfig(context.cwd)
+        const result = await addSkill(
+          config,
+          context.cwd,
+          match[1].toLowerCase() as SkillScope,
+          match[2].trim(),
+          match[3].trim(),
+        )
+        await context.client.reload()
+        return {
+          message: pretty(result),
+        }
+      }
+      if (action === "remove") {
+        const scope = parts[1] as SkillScope | undefined
+        if ((scope !== "project" && scope !== "user") || !parts[2]) {
+          return { message: usage }
+        }
+        const config = await loadConfig(context.cwd)
+        const result = await removeSkill(config, context.cwd, scope, parts.slice(2).join(" "))
+        await context.client.reload()
+        return {
+          message: pretty(result),
         }
       }
       if (action === "search" && parts[1]) {
