@@ -239,6 +239,75 @@ describe("bridge streaming", () => {
     }
   })
 
+  test("exposes channel gateway control-plane endpoints", async () => {
+    const root = join(tmpdir(), `oneclaw-bridge-channels-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const homeDir = join(root, "home")
+    await mkdir(homeDir, { recursive: true })
+
+    process.env.ONECLAW_HOME = homeDir
+    process.env.ONECLAW_PROVIDER = "internal-test"
+    process.env.ONECLAW_BRIDGE_PORT = "0"
+
+    const server = await startBridgeServer()
+    try {
+      const baseUrl = `http://${server.hostname}:${server.port}`
+      const addResponse = await fetch(`${baseUrl}/channels`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          name: "release-room",
+          kind: "slack",
+          label: "Release Room",
+          secretEnv: "SLACK_TOKEN",
+        }),
+      })
+      expect(addResponse.ok).toBe(true)
+      const added = await addResponse.json() as { channel: { name: string; kind: string } }
+      expect(added.channel.name).toBe("release-room")
+      expect(added.channel.kind).toBe("slack")
+
+      const listResponse = await fetch(`${baseUrl}/channels?query=release`)
+      expect(listResponse.ok).toBe(true)
+      const listed = await listResponse.json() as { count: number; channels: Array<{ name: string }> }
+      expect(listed.count).toBe(1)
+      expect(listed.channels[0]?.name).toBe("release-room")
+
+      const messageResponse = await fetch(`${baseUrl}/channels/release-room/messages`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          text: "ship it",
+          sender: "ci",
+          run: false,
+        }),
+      })
+      expect(messageResponse.status).toBe(202)
+      const recorded = await messageResponse.json() as { message: { text: string; channel: string } }
+      expect(recorded.message.text).toBe("ship it")
+      expect(recorded.message.channel).toBe("release-room")
+
+      const messagesResponse = await fetch(`${baseUrl}/channels/messages?query=ship`)
+      expect(messagesResponse.ok).toBe(true)
+      const messages = await messagesResponse.json() as { count: number; messages: Array<{ text: string }> }
+      expect(messages.count).toBe(1)
+      expect(messages.messages[0]?.text).toBe("ship it")
+
+      const removeResponse = await fetch(`${baseUrl}/channels/release-room`, {
+        method: "DELETE",
+      })
+      expect(removeResponse.ok).toBe(true)
+      const removed = await removeResponse.json() as { removed: boolean }
+      expect(removed.removed).toBe(true)
+    } finally {
+      server.stop()
+      restoreEnv()
+    }
+  })
+
   test("supports scoped auth tokens and artifact exports", async () => {
     const root = join(tmpdir(), `oneclaw-bridge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
     const homeDir = join(root, "home")

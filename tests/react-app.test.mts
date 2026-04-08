@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionRecord } from "../src/types.mts"
 import {
+  buildArtifactPanelEntries,
+  buildArtifactPanelLines,
   buildBridgeActionOptions,
   buildBridgePanelEntries,
   buildBridgeSummaryLines,
@@ -233,6 +235,48 @@ describe("TUI view model", () => {
     expect(buildMcpActionOptions("statuses", { kind: "status", server: "fs", value: "fs", label: "fs" }).map(option => option.value)).toEqual([
       "inspect-mcp",
       "reconnect-mcp",
+    ])
+  })
+
+  test("artifact panel lines expose local tool result artifacts", () => {
+    const snapshot = {
+      reachable: true,
+      count: 2,
+      artifacts: [
+        {
+          id: "artifact_abcdef123456",
+          kind: "tool-result" as const,
+          name: "fetch-result",
+          source: "web_fetch",
+          contentType: "application/json",
+          path: "/tmp/artifact.json",
+          relativePath: ".oneclaw/artifacts/artifact.json",
+          bytes: 128,
+          createdAt: "2026-04-08T00:00:00Z",
+          metadata: {},
+        },
+        {
+          id: "artifact_review",
+          kind: "swarm-summary" as const,
+          name: "swarm review",
+          contentType: "text/markdown",
+          path: "/tmp/swarm.md",
+          relativePath: ".oneclaw/artifacts/swarm.md",
+          bytes: 64,
+          createdAt: "2026-04-08T00:00:01Z",
+          metadata: {},
+        },
+      ],
+    }
+
+    expect(buildArtifactPanelLines(snapshot, "overview").join("\n")).toContain("tool-result:1")
+    expect(buildArtifactPanelLines(snapshot, "all")).toEqual([
+      "artifact_abc... · tool-result · web_fetch · 128b",
+      "artifact_rev... · swarm-summary · swarm review · 64b",
+    ])
+    expect(buildArtifactPanelEntries(snapshot)).toEqual([
+      { value: "artifact_abcdef123456", label: "artifact_abc... · tool-result · web_fetch · 128b" },
+      { value: "artifact_review", label: "artifact_rev... · swarm-summary · swarm review · 64b" },
     ])
   })
 

@@ -2,6 +2,14 @@ import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { basename, extname, join } from "node:path"
 import { TeamRegistry } from "../agents/team-registry.mts"
 import { BridgeSessionManager } from "./manager.mts"
+import {
+  listChannelMessages,
+  listChannels,
+  recordChannelMessage,
+  removeChannel,
+  upsertChannel,
+  type ChannelKind,
+} from "../channels/registry.mts"
 import { loadConfig } from "../config.mts"
 import { KernelClient } from "../frontend/kernel-client.mts"
 import { TaskManager } from "../tasks/task-manager.mts"
@@ -439,6 +447,103 @@ export async function startBridgeServer() {
           return denied
         }
         return json(await client.mcp())
+      }
+
+      if (request.method === "GET" && url.pathname === "/channels") {
+        const denied = requireScope("read")
+        if (denied) {
+          return denied
+        }
+        return json(await listChannels(config, url.searchParams.get("query") ?? ""))
+      }
+
+      if (request.method === "POST" && url.pathname === "/channels") {
+        const denied = requireScope("write")
+        if (denied) {
+          return denied
+        }
+        const body = await request.json().catch(() => ({})) as {
+          name?: string
+          kind?: ChannelKind
+          label?: string
+          secretEnv?: string
+          webhookPath?: string
+          enabled?: boolean
+          metadata?: Record<string, unknown>
+        }
+        if (!body.name || !body.kind) {
+          return json({ error: "name and kind are required" }, 400)
+        }
+        return json(await upsertChannel(config, {
+          name: body.name,
+          kind: body.kind,
+          label: body.label,
+          secretEnv: body.secretEnv,
+          webhookPath: body.webhookPath,
+          enabled: body.enabled,
+          metadata: body.metadata,
+        }), 201)
+      }
+
+      if (request.method === "GET" && url.pathname === "/channels/messages") {
+        const denied = requireScope("read")
+        if (denied) {
+          return denied
+        }
+        return json(await listChannelMessages(config, url.searchParams.get("query") ?? ""))
+      }
+
+      if (request.method === "DELETE" && parts.length === 2 && parts[0] === "channels") {
+        const denied = requireScope("write")
+        if (denied) {
+          return denied
+        }
+        return json(await removeChannel(config, parts[1]))
+      }
+
+      if (
+        request.method === "POST" &&
+        parts.length === 3 &&
+        parts[0] === "channels" &&
+        parts[2] === "messages"
+      ) {
+        const denied = requireScope("write")
+        if (denied) {
+          return denied
+        }
+        const body = await request.json().catch(() => ({})) as {
+          text?: string
+          prompt?: string
+          sender?: string
+          threadId?: string
+          run?: boolean
+          metadata?: Record<string, unknown>
+        }
+        const text = body.text ?? body.prompt ?? ""
+        if (!text.trim()) {
+          return json({ error: "text or prompt is required" }, 400)
+        }
+        const recorded = await recordChannelMessage(config, {
+          channel: parts[1],
+          direction: "inbound",
+          text,
+          sender: body.sender,
+          threadId: body.threadId,
+          metadata: body.metadata,
+        })
+        if (!body.run) {
+          return json(recorded, 202)
+        }
+        const task = await startBridgeManagedTask(bridgeTasks, bridge, {
+          cwd: process.cwd(),
+          goal: `channel:${parts[1]}`,
+          prompt: text,
+          team: typeof body.metadata?.team === "string" ? body.metadata.team : undefined,
+        })
+        return json({
+          ...recorded,
+          task,
+        }, 202)
       }
 
       if (request.method === "GET" && url.pathname === "/bridge/sessions") {

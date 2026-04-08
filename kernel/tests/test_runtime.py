@@ -281,6 +281,52 @@ class KernelRuntimeTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_lsp_query_can_use_external_adapter(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            os.environ["ONECLAW_HOME"] = root
+            os.environ["ONECLAW_PROVIDER"] = "internal-test"
+            original_command = os.environ.get("ONECLAW_LSP_COMMAND")
+            original_strict = os.environ.get("ONECLAW_LSP_STRICT")
+            original_timeout = os.environ.get("ONECLAW_LSP_TIMEOUT_MS")
+            adapter_path = Path(root, "fake_lsp_adapter.py")
+            adapter_path.write_text(
+                "import json, sys\n"
+                "payload = json.load(sys.stdin)\n"
+                "json.dump({\n"
+                "  'results': [{\n"
+                "    'name': payload.get('query') or payload.get('symbol') or 'adapter-symbol',\n"
+                "    'kind': 'class',\n"
+                "    'file': 'adapter.py',\n"
+                "    'line': 7,\n"
+                "  }],\n"
+                "  'count': 1,\n"
+                "}, sys.stdout)\n",
+                "utf-8",
+            )
+            os.environ["ONECLAW_LSP_COMMAND"] = f"{sys.executable} {adapter_path}"
+            os.environ["ONECLAW_LSP_STRICT"] = "1"
+            os.environ["ONECLAW_LSP_TIMEOUT_MS"] = "5000"
+            try:
+                kernel = OneClawKernel(root)
+                result = kernel.lsp_query("workspace_symbol", query="AdapterSymbol", limit=5)
+                self.assertEqual(result["adapter"]["kind"], "external")
+                self.assertIn("fake_lsp_adapter.py", result["adapter"]["command"])
+                self.assertEqual(result["results"][0]["name"], "AdapterSymbol")
+                kernel.shutdown()
+            finally:
+                if original_command is None:
+                    os.environ.pop("ONECLAW_LSP_COMMAND", None)
+                else:
+                    os.environ["ONECLAW_LSP_COMMAND"] = original_command
+                if original_strict is None:
+                    os.environ.pop("ONECLAW_LSP_STRICT", None)
+                else:
+                    os.environ["ONECLAW_LSP_STRICT"] = original_strict
+                if original_timeout is None:
+                    os.environ.pop("ONECLAW_LSP_TIMEOUT_MS", None)
+                else:
+                    os.environ["ONECLAW_LSP_TIMEOUT_MS"] = original_timeout
+
     def test_internal_test_provider_emits_text_delta_events(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             os.environ["ONECLAW_HOME"] = root

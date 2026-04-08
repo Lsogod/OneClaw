@@ -3419,6 +3419,18 @@ class OneClawKernel:
         query: str | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
+        external = self._external_lsp_query(
+            operation,
+            file_path=file_path,
+            symbol=symbol,
+            line=line,
+            character=character,
+            query=query,
+            limit=limit,
+        )
+        if external is not None:
+            return external
+
         root = Path(self.cwd).resolve()
         bounded_limit = max(1, min(int(limit or 100), 500))
         normalized_operation = operation.strip() or "workspace_symbol"
@@ -3534,6 +3546,69 @@ class OneClawKernel:
             }
 
         raise RuntimeError("Unsupported lsp operation. Use document_symbol, workspace_symbol, go_to_definition, find_references, or hover.")
+
+    def _external_lsp_query(
+        self,
+        operation: str,
+        *,
+        file_path: str | None = None,
+        symbol: str | None = None,
+        line: int | None = None,
+        character: int | None = None,
+        query: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any] | None:
+        command = os.environ.get("ONECLAW_LSP_COMMAND", "").strip()
+        if not command:
+            return None
+        payload = {
+            "operation": operation,
+            "cwd": self.cwd,
+            "filePath": file_path,
+            "symbol": symbol,
+            "line": line,
+            "character": character,
+            "query": query,
+            "limit": limit,
+        }
+        try:
+            completed = subprocess.run(
+                shlex.split(command),
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                timeout=max(1, min(int(os.environ.get("ONECLAW_LSP_TIMEOUT_MS", "8000")) / 1000, 30)),
+                cwd=self.cwd,
+                check=False,
+            )
+        except Exception as error:
+            if os.environ.get("ONECLAW_LSP_STRICT") == "1":
+                raise RuntimeError(f"External LSP adapter failed: {error}") from error
+            self.logger.warn(f"[lsp] external adapter unavailable; falling back to built-in scanner: {error}")
+            return None
+        if completed.returncode != 0:
+            message = (completed.stderr or completed.stdout or "external LSP adapter failed").strip()
+            if os.environ.get("ONECLAW_LSP_STRICT") == "1":
+                raise RuntimeError(message)
+            self.logger.warn(f"[lsp] external adapter failed; falling back to built-in scanner: {message}")
+            return None
+        try:
+            result = json.loads(completed.stdout or "{}")
+        except json.JSONDecodeError as error:
+            if os.environ.get("ONECLAW_LSP_STRICT") == "1":
+                raise RuntimeError("External LSP adapter returned invalid JSON") from error
+            self.logger.warn("[lsp] external adapter returned invalid JSON; falling back to built-in scanner")
+            return None
+        if not isinstance(result, dict):
+            if os.environ.get("ONECLAW_LSP_STRICT") == "1":
+                raise RuntimeError("External LSP adapter returned a non-object JSON payload")
+            return None
+        result.setdefault("operation", operation)
+        result["adapter"] = {
+            "kind": "external",
+            "command": command,
+        }
+        return result
 
     def web_search(self, query: str, max_results: int = 5, timeout_ms: int = 10000) -> dict[str, Any]:
         search_query = query.strip()

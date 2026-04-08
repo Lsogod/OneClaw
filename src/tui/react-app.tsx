@@ -9,6 +9,7 @@ import React, {
 } from "react"
 import { basename } from "node:path"
 import { Box, Text, render, useApp, useInput } from "./ink-runtime.js"
+import { listArtifacts, readArtifactContent, type ArtifactRecord } from "../artifacts/catalog.mts"
 import { createFrontendCommandRegistry } from "../commands/frontend-registry.mts"
 import { loadConfig } from "../config.mts"
 import { KernelClient } from "../frontend/kernel-client.mts"
@@ -104,6 +105,7 @@ type BridgeSnapshot = {
 
 type BridgeViewMode = "overview" | "tasks" | "teams" | "sessions"
 type McpViewMode = "overview" | "tools" | "resources" | "statuses"
+type ArtifactViewMode = "overview" | "all"
 
 type BridgePanelEntry = {
   value: string
@@ -131,6 +133,18 @@ type McpPanelEntry = {
   server?: string
   uri?: string
   uriTemplate?: string
+}
+
+type ArtifactSnapshot = {
+  reachable: boolean
+  artifacts: ArtifactRecord[]
+  count?: number
+  error?: string
+}
+
+type ArtifactPanelEntry = {
+  value: string
+  label: string
 }
 
 type UiPresentation = {
@@ -495,6 +509,23 @@ async function loadBridgeSnapshotForUi(cwd: string): Promise<BridgeSnapshot> {
   }
 }
 
+async function loadArtifactSnapshotForUi(cwd: string): Promise<ArtifactSnapshot> {
+  try {
+    const payload = await listArtifacts(cwd)
+    return {
+      reachable: true,
+      count: payload.count,
+      artifacts: payload.artifacts,
+    }
+  } catch (error) {
+    return {
+      reachable: false,
+      artifacts: [],
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
 export function buildBridgeSummaryLines(snapshot: BridgeSnapshot): string[] {
   if (!snapshot.reachable) {
     return snapshot.error ? [`bridge offline · ${snapshot.error}`] : ["bridge offline"]
@@ -541,6 +572,41 @@ async function bridgeFetchForUi(
     throw new Error(`bridge request failed (${response.status})`)
   }
   return options.text ? response.text() : response.json()
+}
+
+export function buildArtifactPanelEntries(snapshot: ArtifactSnapshot): ArtifactPanelEntry[] {
+  if (!snapshot.reachable) {
+    return []
+  }
+  return snapshot.artifacts.slice(0, 12).map(artifact => ({
+    value: artifact.id,
+    label: [
+      shortId(artifact.id),
+      artifact.kind,
+      artifact.source ?? artifact.name,
+      `${artifact.bytes}b`,
+    ].filter(Boolean).join(" · "),
+  }))
+}
+
+export function buildArtifactPanelLines(snapshot: ArtifactSnapshot, mode: ArtifactViewMode = "overview"): string[] {
+  if (!snapshot.reachable) {
+    return [`artifacts offline · ${snapshot.error ?? "unknown error"}`]
+  }
+  if (snapshot.artifacts.length === 0) {
+    return ["no artifacts yet", "/fetch --artifact · /symbols --artifact · /swarm artifact <team>"]
+  }
+  if (mode === "overview") {
+    const byKind = new Map<string, number>()
+    for (const artifact of snapshot.artifacts) {
+      byKind.set(artifact.kind, (byKind.get(artifact.kind) ?? 0) + 1)
+    }
+    return [
+      `${snapshot.artifacts.length} artifacts · ${[...byKind.entries()].map(([kind, count]) => `${kind}:${count}`).join(" · ")}`,
+      ...snapshot.artifacts.slice(0, 5).map(artifact => `${shortId(artifact.id)} · ${artifact.kind} · ${artifact.source ?? artifact.name}`),
+    ]
+  }
+  return buildArtifactPanelEntries(snapshot).map(entry => entry.label)
 }
 
 export function buildBridgePanelEntries(
@@ -1325,6 +1391,32 @@ function McpPanel(props: {
   )
 }
 
+function ArtifactPanel(props: {
+  snapshot: ArtifactSnapshot
+  mode: ArtifactViewMode
+  selectionIndex: number
+}) {
+  const lines = buildArtifactPanelLines(props.snapshot, props.mode)
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={1}>
+      <Text bold>{props.mode === "overview" ? "Artifacts" : "Artifacts all"}</Text>
+      <Text dim>{"Ctrl+A toggle  [ ] select  Enter read  /artifacts list"}</Text>
+      <Text> </Text>
+      {lines.map((line, index) => (
+        <Text
+          key={`artifact-panel-${index}`}
+          color={index === props.selectionIndex && props.mode !== "overview" ? "cyan" : undefined}
+          bold={index === props.selectionIndex && props.mode !== "overview"}
+          dim={index > 0 && props.mode === "overview"}
+          wrap="truncate-end"
+        >
+          {line}
+        </Text>
+      ))}
+    </Box>
+  )
+}
+
 function StatusBar(props: {
   runtimeState: RuntimeStateView
   usage: UsageView
@@ -1333,17 +1425,21 @@ function StatusBar(props: {
   running: boolean
   activeRequestId: string | null
   bridgeSnapshot: BridgeSnapshot
+  artifactSnapshot: ArtifactSnapshot
 }) {
   const stats = resolveStatusBarStats(props.runtimeState, props.usage)
   const presentation = resolveUiPresentation(props.runtimeState)
   const bridgeSummary = props.bridgeSnapshot.reachable
     ? `bridge: ${props.bridgeSnapshot.sessions.length}s/${props.bridgeSnapshot.tasks.length}t/${props.bridgeSnapshot.teams.length}tm`
     : "bridge: offline"
+  const artifactSummary = props.artifactSnapshot.reachable
+    ? `artifacts: ${props.artifactSnapshot.artifacts.length}`
+    : "artifacts: offline"
   return (
     <Box flexDirection="column">
       <Text color={presentation.mutedColor}>{"─".repeat(96)}</Text>
       <Text color={presentation.mutedColor}>
-        {`provider: ${stats.provider} │ profile: ${stats.profile} │ model: ${stats.model} │ mode: ${stats.permissionMode} │ effort: ${stats.effort}${stats.fastMode ? " fast" : ""}${stats.vimMode ? " vim" : ""}${stats.voiceMode ? " voice" : ""} │ tokens: ${stats.tokensIn}↓ ${stats.tokensOut}↑ │ mcp: ${stats.mcpConnected} │ plugins: ${stats.pluginCount} │ sessions: ${props.sessionCount} │ ${bridgeSummary} │ cost: $${stats.estimatedCostUsd.toFixed(4)}${props.running ? ` │ running ${props.activeRequestId ?? props.selectedSessionId}` : ""}`}
+        {`provider: ${stats.provider} │ profile: ${stats.profile} │ model: ${stats.model} │ mode: ${stats.permissionMode} │ effort: ${stats.effort}${stats.fastMode ? " fast" : ""}${stats.vimMode ? " vim" : ""}${stats.voiceMode ? " voice" : ""} │ tokens: ${stats.tokensIn}↓ ${stats.tokensOut}↑ │ mcp: ${stats.mcpConnected} │ plugins: ${stats.pluginCount} │ sessions: ${props.sessionCount} │ ${bridgeSummary} │ ${artifactSummary} │ cost: $${stats.estimatedCostUsd.toFixed(4)}${props.running ? ` │ running ${props.activeRequestId ?? props.selectedSessionId}` : ""}`}
       </Text>
     </Box>
   )
@@ -1388,6 +1484,13 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
   const [mcpSnapshot, setMcpSnapshot] = useState<McpSnapshot>({})
   const [mcpViewMode, setMcpViewMode] = useState<McpViewMode>("overview")
   const [mcpSelectionIndex, setMcpSelectionIndex] = useState(0)
+  const [artifactSnapshot, setArtifactSnapshot] = useState<ArtifactSnapshot>({
+    reachable: true,
+    artifacts: [],
+  })
+  const [artifactViewMode, setArtifactViewMode] = useState<ArtifactViewMode>("overview")
+  const [artifactSelectionIndex, setArtifactSelectionIndex] = useState(0)
+  const [artifactPanelVisible, setArtifactPanelVisible] = useState(false)
   const approvalResolverRef = useRef<((allowed: boolean) => void) | null>(null)
   const bridgeViewModeRef = useRef<BridgeViewMode>("overview")
 
@@ -1400,6 +1503,10 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
   const mcpEntries = useMemo(
     () => buildMcpPanelEntries(mcpSnapshot, mcpViewMode),
     [mcpSnapshot, mcpViewMode],
+  )
+  const artifactEntries = useMemo(
+    () => buildArtifactPanelEntries(artifactSnapshot),
+    [artifactSnapshot],
   )
   const presentation = resolveUiPresentation(runtimeState)
 
@@ -1420,6 +1527,13 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       return Math.min(previous, maxIndex)
     })
   }, [mcpEntries.length, mcpViewMode])
+
+  useEffect(() => {
+    setArtifactSelectionIndex(previous => {
+      const maxIndex = Math.max(0, artifactEntries.length - 1)
+      return Math.min(previous, maxIndex)
+    })
+  }, [artifactEntries.length, artifactViewMode])
 
   const pushEvent = useEffectEvent((label: string) => {
     const trimmed = label.trim()
@@ -1472,6 +1586,13 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
     const snapshot = await loadBridgeSnapshotForUi(cwd)
     startTransition(() => {
       setBridgeSnapshot(snapshot)
+    })
+  })
+
+  const refreshArtifactSnapshot = useEffectEvent(async () => {
+    const snapshot = await loadArtifactSnapshotForUi(cwd)
+    startTransition(() => {
+      setArtifactSnapshot(snapshot)
     })
   })
 
@@ -1676,6 +1797,53 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         }
         return next
       })
+    })
+  })
+
+  const toggleArtifactPanel = useEffectEvent(() => {
+    startTransition(() => {
+      setArtifactPanelVisible(previous => !previous)
+      setArtifactViewMode("all")
+      setArtifactSelectionIndex(0)
+      setStatusLine("Artifacts panel toggled")
+    })
+    void refreshArtifactSnapshot()
+  })
+
+  const moveArtifactSelection = useEffectEvent((delta: 1 | -1) => {
+    if (!artifactPanelVisible || artifactViewMode === "overview" || artifactEntries.length === 0) {
+      return
+    }
+    startTransition(() => {
+      setArtifactSelectionIndex(previous => {
+        const maxIndex = artifactEntries.length - 1
+        const next = Math.max(0, Math.min(maxIndex, previous + delta))
+        const selected = artifactEntries[next]
+        if (selected) {
+          setStatusLine(`Artifact ${selected.value}`)
+        }
+        return next
+      })
+    })
+  })
+
+  const inspectArtifactSelection = useEffectEvent(async () => {
+    if (!artifactPanelVisible || artifactEntries.length === 0) {
+      return
+    }
+    const selected = artifactEntries[artifactSelectionIndex]
+    if (!selected) {
+      return
+    }
+    const payload = await readArtifactContent(cwd, selected.value)
+    startTransition(() => {
+      setInspectorText(payload
+        ? JSON.stringify({
+            artifact: payload.record,
+            content: payload.content.slice(0, 12_000),
+          }, null, 2)
+        : `Artifact not found: ${selected.value}`)
+      setStatusLine(payload ? `Artifact ${selected.value}` : `Artifact missing ${selected.value}`)
     })
   })
 
@@ -2194,6 +2362,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       })
       await refreshSnapshot(requestedSessionId)
       await refreshBridgeSnapshot()
+      await refreshArtifactSnapshot()
       if (result.shouldExit) {
         exit()
       }
@@ -2266,6 +2435,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       pushEvent(`completed ${result.stopReason}`)
       await refreshSnapshot(result.sessionId)
       await refreshBridgeSnapshot()
+      await refreshArtifactSnapshot()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       startTransition(() => {
@@ -2276,6 +2446,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       pushEvent(`error ${message}`)
       await refreshSnapshot(selectedSessionId)
       await refreshBridgeSnapshot()
+      await refreshArtifactSnapshot()
     } finally {
       startTransition(() => {
         setRunning(false)
@@ -2324,6 +2495,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         })
         await refreshSnapshot(session.id)
         await refreshBridgeSnapshot()
+        await refreshArtifactSnapshot()
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         startTransition(() => {
@@ -2338,6 +2510,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       if (!disposed) {
         void refreshSnapshot()
         void refreshBridgeSnapshot()
+        void refreshArtifactSnapshot()
       }
     }, 1500)
 
@@ -2479,6 +2652,10 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       cycleMcpView()
       return
     }
+    if (key.ctrl && input === "a") {
+      toggleArtifactPanel()
+      return
+    }
     if (key.escape) {
       if (paletteOpen) {
         startTransition(() => {
@@ -2512,6 +2689,10 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       return
     }
     if (key.return) {
+      if (!inputBuffer.trim() && !paletteOpen && hints.length === 0 && artifactPanelVisible) {
+        void inspectArtifactSelection()
+        return
+      }
       if (!inputBuffer.trim() && !paletteOpen && hints.length === 0 && mcpViewMode !== "overview") {
         void inspectMcpSelection()
         return
@@ -2552,7 +2733,9 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       return
     }
     if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && input === "[") {
-      if (mcpViewMode !== "overview") {
+      if (artifactPanelVisible) {
+        moveArtifactSelection(-1)
+      } else if (mcpViewMode !== "overview") {
         moveMcpSelection(-1)
       } else {
         moveBridgeSelection(-1)
@@ -2560,7 +2743,9 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       return
     }
     if (!inputBuffer.length && !paletteOpen && hints.length === 0 && !key.ctrl && !key.meta && input === "]") {
-      if (mcpViewMode !== "overview") {
+      if (artifactPanelVisible) {
+        moveArtifactSelection(1)
+      } else if (mcpViewMode !== "overview") {
         moveMcpSelection(1)
       } else {
         moveBridgeSelection(1)
@@ -2699,6 +2884,14 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         />
       ) : null}
 
+      {ready && artifactPanelVisible ? (
+        <ArtifactPanel
+          snapshot={artifactSnapshot}
+          mode={artifactViewMode}
+          selectionIndex={artifactSelectionIndex}
+        />
+      ) : null}
+
       <StatusBar
         runtimeState={runtimeState}
         usage={usage}
@@ -2707,6 +2900,7 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
         running={running}
         activeRequestId={activeRequestId}
         bridgeSnapshot={bridgeSnapshot}
+        artifactSnapshot={artifactSnapshot}
       />
 
       {!ready ? (
@@ -2740,6 +2934,8 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
             {" mcp  "}
             <Text color={presentation.primaryColor}>{presentation.bridgeKey}</Text>
             {" bridge  "}
+            <Text color={presentation.primaryColor}>{"ctrl+a"}</Text>
+            {" artifacts  "}
             <Text color={presentation.primaryColor}>{"[ ]"}</Text>
             {" pick  "}
             <Text color={presentation.primaryColor}>{"."}</Text>

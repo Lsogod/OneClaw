@@ -453,6 +453,52 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/feedback")
     expect(helpText).toContain("/instructions")
     expect(helpText).toContain("/artifacts")
+    expect(helpText).toContain("/channels")
+  })
+
+  test("channels command manages local gateway registrations and inbox records", async () => {
+    const originalHome = process.env.ONECLAW_HOME
+    const homeDir = join(tmpdir(), `oneclaw-channels-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const workspace = join(tmpdir(), `oneclaw-channels-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    await mkdir(homeDir, { recursive: true })
+    await mkdir(workspace, { recursive: true })
+    process.env.ONECLAW_HOME = homeDir
+
+    try {
+      const registry = createFrontendCommandRegistry()
+      const context = {
+        client: createFakeClient(),
+        sessionId: "session_current",
+        cwd: workspace,
+      } as never
+      const addLookup = registry.lookup("/channels add slack release-room --label Release Room --secret-env SLACK_TOKEN")
+      const sendLookup = registry.lookup("/channels send release-room deploy finished")
+
+      const addResult = await addLookup?.command.handler(addLookup.args, context)
+      const sendResult = await sendLookup?.command.handler(sendLookup.args, context)
+      const inboxResult = await registry.lookup("/channels inbox release-room")?.command.handler("inbox release-room", context)
+      const inboxPayload = JSON.parse(inboxResult?.message ?? "{}") as {
+        messages?: Array<{ id: string }>
+      }
+      const messageId = inboxPayload.messages?.[0]?.id ?? ""
+      const ackResult = await registry.lookup(`/channels ack ${messageId}`)?.command.handler(`ack ${messageId}`, context)
+      const showResult = await registry.lookup("/channels show release-room")?.command.handler("show release-room", context)
+      const removeResult = await registry.lookup("/channels remove release-room")?.command.handler("remove release-room", context)
+
+      expect(addResult?.message).toContain("release-room")
+      expect(addResult?.message).toContain("slack")
+      expect(sendResult?.message).toContain("deploy finished")
+      expect(inboxResult?.message).toContain(messageId)
+      expect(ackResult?.message).toContain('"acknowledged": true')
+      expect(showResult?.message).toContain("release-room")
+      expect(removeResult?.message).toContain('"removed": true')
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ONECLAW_HOME
+      } else {
+        process.env.ONECLAW_HOME = originalHome
+      }
+    }
   })
 
   test("OpenHarness-style utility commands manage project and session snapshots", async () => {
@@ -2113,6 +2159,8 @@ describe("Frontend command registry", () => {
     const symbolsLookup = registry.lookup("/symbols OneClaw --path src --limit 5")
     const lspWorkspaceLookup = registry.lookup("/lsp workspace OneClaw --limit 5")
     const lspDefinitionLookup = registry.lookup("/lsp definition src/runtime.py OneClawRuntime")
+    const lspStatusLookup = registry.lookup("/lsp status")
+    const lspTestLookup = registry.lookup("/lsp test OneClaw --artifact")
     const fetchLookup = registry.lookup("/fetch https://example.test/page 1200")
     const searchLookup = registry.lookup("/search-web oneclaw harness --limit 1")
     const todoListLookup = registry.lookup("/todo")
@@ -2140,6 +2188,8 @@ describe("Frontend command registry", () => {
     const symbolsResult = await symbolsLookup?.command.handler(symbolsLookup.args, context)
     const lspWorkspaceResult = await lspWorkspaceLookup?.command.handler(lspWorkspaceLookup.args, context)
     const lspDefinitionResult = await lspDefinitionLookup?.command.handler(lspDefinitionLookup.args, context)
+    const lspStatusResult = await lspStatusLookup?.command.handler(lspStatusLookup.args, context)
+    const lspTestResult = await lspTestLookup?.command.handler(lspTestLookup.args, context)
     const fetchResult = await fetchLookup?.command.handler(fetchLookup.args, context)
     const searchResult = await searchLookup?.command.handler(searchLookup.args, context)
     const listResult = await todoListLookup?.command.handler(todoListLookup.args, context)
@@ -2152,6 +2202,8 @@ describe("Frontend command registry", () => {
     expect(lspWorkspaceResult?.message).toContain("workspace_symbol")
     expect(lspDefinitionResult?.message).toContain("go_to_definition")
     expect(lspDefinitionResult?.message).toContain("OneClawRuntime")
+    expect(lspStatusResult?.message).toContain("builtin-python")
+    expect(lspTestResult?.message).toContain("artifact_")
     expect(fetchResult?.message).toContain("https://example.test/page")
     expect(fetchResult?.message).toContain("fetched")
     expect(searchResult?.message).toContain("oneclaw harness")

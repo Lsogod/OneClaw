@@ -13,6 +13,15 @@ import {
 import { collectProviderAuthStatuses } from "../providers/auth.mts"
 import { TeamRegistry } from "../agents/team-registry.mts"
 import {
+  acknowledgeChannelMessage,
+  listChannelMessages,
+  listChannels,
+  recordChannelMessage,
+  removeChannel,
+  upsertChannel,
+  type ChannelKind,
+} from "../channels/registry.mts"
+import {
   findCommandSnippet,
   initCommandSnippet,
   listCommandSnippets,
@@ -2861,6 +2870,80 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
   })
 
   registry.register({
+    name: "channels",
+    description: "Manage local channel gateway registries and inbox messages",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts[0] ?? "list"
+      const config = await loadConfig(context.cwd)
+      if (action === "list") {
+        return {
+          message: pretty(await listChannels(config, parts.slice(1).join(" "))),
+        }
+      }
+      if (action === "add" && parts[1] && parts[2]) {
+        const kind = parts[1] as ChannelKind
+        const name = parts[2]
+        const secretEnv = takeFlagValue(parts, ["--secret-env"]) ?? undefined
+        const label = takeFlagValue(parts, ["--label"]) ?? undefined
+        const webhookPath = takeFlagValue(parts, ["--webhook-path"]) ?? undefined
+        return {
+          message: pretty(await upsertChannel(config, {
+            kind,
+            name,
+            label,
+            secretEnv,
+            webhookPath,
+          })),
+        }
+      }
+      if ((action === "remove" || action === "delete") && parts[1]) {
+        return {
+          message: pretty(await removeChannel(config, parts[1])),
+        }
+      }
+      if (action === "send" && parts[1]) {
+        const text = args.replace(/^send\s+\S+\s*/, "").trim()
+        if (!text) {
+          return { message: "Usage: /channels send <name> <message>" }
+        }
+        return {
+          message: pretty(await recordChannelMessage(config, {
+            channel: parts[1],
+            direction: "outbound",
+            text,
+          })),
+        }
+      }
+      if (action === "inbox") {
+        return {
+          message: pretty(await listChannelMessages(config, parts.slice(1).join(" "))),
+        }
+      }
+      if (action === "ack" && parts[1]) {
+        return {
+          message: pretty(await acknowledgeChannelMessage(config, parts[1])),
+        }
+      }
+      if (action === "show" && parts[1]) {
+        const [channels, messages] = await Promise.all([
+          listChannels(config, parts[1]),
+          listChannelMessages(config, parts[1]),
+        ])
+        return {
+          message: pretty({
+            channels: channels.channels,
+            messages: messages.messages,
+          }),
+        }
+      }
+      return {
+        message: "Usage: /channels [list [query]|add <kind> <name> [--label <label>] [--secret-env <ENV>] [--webhook-path <path>]|remove <name>|send <name> <message>|inbox [query]|ack <message>|show <name>]",
+      }
+    },
+  })
+
+  registry.register({
     name: "agents",
     description: "Inspect or run parallel delegate-style subtasks",
     handler: async (args, context) => {
@@ -3475,6 +3558,23 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
             artifact: artifact.record,
           }),
         }
+      }
+      if (action === "status" || action === "server") {
+        return {
+          message: pretty({
+            adapter: process.env.ONECLAW_LSP_COMMAND ? "external" : "builtin-python",
+            command: process.env.ONECLAW_LSP_COMMAND ?? null,
+            strict: process.env.ONECLAW_LSP_STRICT === "1",
+            timeoutMs: Number.parseInt(process.env.ONECLAW_LSP_TIMEOUT_MS ?? "8000", 10),
+          }),
+        }
+      }
+      if (action === "test") {
+        const query = parts.join(" ").trim() || "OneClaw"
+        return await returnPayload(
+          await context.client.lsp({ operation: "workspace_symbol", query, limit: 5 }),
+          { query, adapter: process.env.ONECLAW_LSP_COMMAND ? "external" : "builtin-python" },
+        )
       }
       const limitValue = takeFlagValue(parts, ["--limit", "-n"])
       if (limitValue !== null) {
