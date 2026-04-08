@@ -273,6 +273,65 @@ SYMBOL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 
 IGNORED_SYMBOL_DIRS = {".git", ".hg", ".svn", ".venv", "__pycache__", "dist", "node_modules", "release", "target"}
+PROJECT_INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md", "ONECLAW.md")
+PROJECT_INSTRUCTION_RULE_DIRS = (Path(".claude") / "rules", Path(".oneclaw") / "rules")
+PROJECT_INSTRUCTION_INLINE_FILES = (Path(".claude") / "CLAUDE.md", Path(".oneclaw") / "instructions.md")
+
+
+def discover_project_instruction_files(cwd: str | Path, roots: list[str]) -> list[Path]:
+    current = Path(cwd).resolve()
+    results: list[Path] = []
+    seen: set[Path] = set()
+    for directory in [current, *current.parents]:
+        candidates = [directory / name for name in PROJECT_INSTRUCTION_FILES]
+        candidates.extend(directory / relative for relative in PROJECT_INSTRUCTION_INLINE_FILES)
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if (
+                candidate.is_file()
+                and resolved not in seen
+                and is_inside_roots(str(resolved), roots)
+            ):
+                results.append(resolved)
+                seen.add(resolved)
+        for relative_dir in PROJECT_INSTRUCTION_RULE_DIRS:
+            rules_dir = directory / relative_dir
+            if not rules_dir.is_dir():
+                continue
+            for rule in sorted(rules_dir.glob("*.md")):
+                resolved = rule.resolve()
+                if resolved not in seen and is_inside_roots(str(resolved), roots):
+                    results.append(resolved)
+                    seen.add(resolved)
+        if directory.parent == directory:
+            break
+    return results
+
+
+def load_project_instruction_entries(
+    cwd: str | Path,
+    roots: list[str],
+    max_chars_per_file: int = 12000,
+    max_files: int = 20,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for path in discover_project_instruction_files(cwd, roots)[:max_files]:
+        try:
+            raw = path.read_text("utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not raw:
+            continue
+        truncated = len(raw) > max_chars_per_file
+        content = limit_text(raw, max_chars_per_file)
+        entries.append({
+            "path": str(path),
+            "relativePath": display_path(str(cwd), str(path)),
+            "chars": len(raw),
+            "truncated": truncated,
+            "content": content,
+        })
+    return entries
 
 
 def iter_python_files(root: Path) -> list[Path]:
@@ -2398,6 +2457,7 @@ class OneClawKernel:
                 "recentSummary": recent_summary,
             } if session else None,
             "compactPolicy": self.compact_policy(session_id) if session else self.compact_policy(None),
+            "projectInstructions": self.project_instructions_info(False, session["cwd"] if session else None),
             "tools": self.tools_info(summary_only=True),
             "mcp": {
                 "statuses": self.mcp.list_statuses(),
@@ -2582,6 +2642,43 @@ class OneClawKernel:
             remaining -= len(rendered) + 2
         return sections
 
+    def project_instructions_info(self, include_content: bool = False, cwd: str | None = None) -> dict[str, Any]:
+        target_cwd = cwd or self.cwd
+        entries = load_project_instruction_entries(
+            target_cwd,
+            self._permission_roots(),
+            max_chars_per_file=12000,
+        )
+        if not include_content:
+            entries = [{key: value for key, value in entry.items() if key != "content"} for entry in entries]
+        return {
+            "cwd": target_cwd,
+            "count": len(entries),
+            "files": entries,
+            "supportedFiles": list(PROJECT_INSTRUCTION_FILES),
+            "supportedRuleDirs": [str(path) for path in PROJECT_INSTRUCTION_RULE_DIRS],
+        }
+
+    def _build_project_instruction_section(self, cwd: str, max_chars: int) -> str:
+        entries = load_project_instruction_entries(
+            cwd,
+            self._permission_roots(),
+            max_chars_per_file=max(256, min(12000, max_chars)),
+        )
+        if not entries:
+            return ""
+        remaining = max_chars
+        sections = ["## Project Instructions"]
+        for entry in entries:
+            if remaining <= 96:
+                break
+            header = f"### {entry['relativePath']}"
+            body = limit_text(str(entry["content"]), max(64, remaining - len(header) - 16))
+            rendered = f"{header}\n```md\n{body}\n```"
+            sections.append(rendered)
+            remaining -= len(rendered) + 2
+        return limit_text("\n\n".join(sections), max_chars)
+
     def _build_prompt(self, session: dict[str, Any], prompt: str, skill_names: list[str]) -> str:
         runtime_config = self.config.get("runtime", {})
         base_sections = [
@@ -2607,6 +2704,10 @@ class OneClawKernel:
         sections = list(base_sections)
         joined_base = "\n\n".join(base_sections)
         remaining_budget = max(256, int(self.config["context"]["maxChars"]) - len(joined_base) - 128)
+        project_instructions = self._build_project_instruction_section(session["cwd"], max(96, int(remaining_budget * 0.35)))
+        if project_instructions:
+            sections.append(project_instructions)
+            remaining_budget = max(96, remaining_budget - len(project_instructions) - 2)
         memory_sections = self._build_memory_sections(session, max(96, int(remaining_budget * 0.4)))
         if memory_sections:
             sections.extend(memory_sections)

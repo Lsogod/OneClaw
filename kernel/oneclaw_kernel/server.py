@@ -161,6 +161,11 @@ def main() -> int:
                     params.get("query"),
                     bool(params.get("includeBody")),
                 )
+            elif method == "instructions":
+                result = kernel.project_instructions_info(
+                    bool(params.get("includeContent")),
+                    params.get("cwd"),
+                )
             elif method == "tasks":
                 result = kernel.tasks_info()
             elif method == "sessions":

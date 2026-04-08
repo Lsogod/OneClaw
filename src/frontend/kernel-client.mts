@@ -318,6 +318,10 @@ export class KernelClient {
     return this.request<Record<string, unknown>>("skills", options)
   }
 
+  instructions(options: { includeContent?: boolean; cwd?: string } = {}) {
+    return this.request<Record<string, unknown>>("instructions", options)
+  }
+
   tasks() {
     return this.request<Record<string, unknown>>("tasks")
   }

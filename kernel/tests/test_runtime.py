@@ -113,6 +113,7 @@ class KernelRuntimeTests(unittest.TestCase):
             }), "utf-8")
             kernel = OneClawKernel(root)
             Path(root, "README.md").write_text("hello old\n", "utf-8")
+            Path(root, "ONECLAW.md").write_text("Always mention project instructions.\n", "utf-8")
             Path(root, "app.ts").write_text(
                 "export class OneClawApp {}\nexport function runOneClaw() {}\n",
                 "utf-8",
@@ -166,6 +167,8 @@ class KernelRuntimeTests(unittest.TestCase):
                 "name": "cron_toggle",
                 "input": {"name": "daily-smoke", "enabled": False},
             }, session)
+            instructions = kernel.project_instructions_info(True)
+            system_prompt = kernel._build_prompt(session, "follow project rules", [])
 
             self.assertTrue(globbed["ok"])
             self.assertIn("README.md", globbed["output"])
@@ -187,9 +190,15 @@ class KernelRuntimeTests(unittest.TestCase):
             self.assertIn('"enabled": false', cron_disabled["output"])
             self.assertEqual(kernel.cron_info()["count"], 1)
             self.assertTrue(kernel.cron_delete("daily-smoke")["deleted"])
+            self.assertEqual(instructions["count"], 1)
+            self.assertIn("Always mention project instructions", instructions["files"][0]["content"])
+            self.assertIn("Project Instructions", system_prompt)
+            self.assertIn("Always mention project instructions", system_prompt)
             self.assertGreaterEqual(kernel.tools_info()["count"], 1)
             self.assertEqual(kernel.compact_policy(session["id"])["sessionId"], session["id"])
-            self.assertEqual(kernel.context_info(session["id"])["session"]["id"], session["id"])
+            context = kernel.context_info(session["id"])
+            self.assertEqual(context["session"]["id"], session["id"])
+            self.assertEqual(context["projectInstructions"]["count"], 1)
             kernel.shutdown()
 
     def test_todo_web_fetch_and_web_search_runtime_helpers(self) -> None:

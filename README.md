@@ -393,6 +393,7 @@ bun run sandbox:smoke
 | `/init` | 初始化项目级 `.oneclaw/` memory 与 hooks 文件 |
 | `/status` | 查看 runtime 状态 |
 | `/context` | 查看 context 与 compact 信息 |
+| `/instructions` | 查看或初始化 `ONECLAW.md` / `AGENTS.md` / `CLAUDE.md` 项目指令 |
 | `/compact` / `/rewind` | 手动 compact 或回退最近 assistant turn |
 | `/cost` / `/usage` | 查看 token 和成本 |
 | `/sessions` / `/resume` | 管理 session |
@@ -483,6 +484,7 @@ OneClaw 借鉴了 OpenHarness 中最值得保留的 harness 设计：
 - transcript-first TUI
 - command registry
 - tools/MCP/plugin/skills/memory 分层
+- `CLAUDE.md` / `AGENTS.md` / `ONECLAW.md` 项目指令发现与 prompt 注入
 - tool discovery 与本地 cron job registry
 - lightweight LSP/code-intelligence 入口
 - permission、hooks、sandbox、budget 治理
@@ -509,6 +511,7 @@ OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
 - plugin lifecycle
 - tool search 与本地 cron registry
 - lightweight Python LSP/code-intelligence
+- project instruction discovery：`ONECLAW.md`、`AGENTS.md`、`CLAUDE.md`、`.claude/rules/*.md`
 - memory/session 管理
 - task/team/swarm 基础生命周期
 - sandbox fallback smoke

@@ -244,6 +244,17 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
         body: "Always verify before release.",
       }],
     }),
+    instructions: async (options?: { includeContent?: boolean; cwd?: string }) => ({
+      cwd: options?.cwd ?? "/tmp/workspace",
+      count: 1,
+      files: [{
+        path: "/tmp/workspace/ONECLAW.md",
+        relativePath: "ONECLAW.md",
+        chars: 42,
+        truncated: false,
+        ...(options?.includeContent ? { content: "Use OneClaw project instructions." } : {}),
+      }],
+    }),
     tasks: async () => ({
       attached: false,
       tasks: [],
@@ -432,6 +443,7 @@ describe("Frontend command registry", () => {
     expect(helpText).toContain("/privacy-settings")
     expect(helpText).toContain("/rate-limit-options")
     expect(helpText).toContain("/feedback")
+    expect(helpText).toContain("/instructions")
   })
 
   test("OpenHarness-style utility commands manage project and session snapshots", async () => {
@@ -451,6 +463,9 @@ describe("Frontend command registry", () => {
       } as never
 
       const initLookup = registry.lookup("/init")
+      const instructionsLookup = registry.lookup("/instructions")
+      const instructionsShowLookup = registry.lookup("/instructions show 1")
+      const instructionsInitLookup = registry.lookup("/instructions init agents")
       const shareLookup = registry.lookup("/share")
       const tagLookup = registry.lookup("/tag release candidate")
       const feedbackLookup = registry.lookup("/feedback command parity is useful")
@@ -464,6 +479,9 @@ describe("Frontend command registry", () => {
       const rewindLookup = registry.lookup("/rewind 2")
 
       const initResult = await initLookup?.command.handler(initLookup.args, context)
+      const instructionsResult = await instructionsLookup?.command.handler(instructionsLookup.args, context)
+      const instructionsShowResult = await instructionsShowLookup?.command.handler(instructionsShowLookup.args, context)
+      const instructionsInitResult = await instructionsInitLookup?.command.handler(instructionsInitLookup.args, context)
       const shareResult = await shareLookup?.command.handler(shareLookup.args, context)
       const tagResult = await tagLookup?.command.handler(tagLookup.args, context)
       const feedbackResult = await feedbackLookup?.command.handler(feedbackLookup.args, context)
@@ -478,6 +496,11 @@ describe("Frontend command registry", () => {
 
       expect(initResult?.message).toContain(".oneclaw")
       expect(existsSync(join(workspace, ".oneclaw", "memory.md"))).toBe(true)
+      expect(existsSync(join(workspace, "ONECLAW.md"))).toBe(true)
+      expect(instructionsResult?.message).toContain("ONECLAW.md")
+      expect(instructionsShowResult?.message).toContain("Use OneClaw project instructions")
+      expect(instructionsInitResult?.message).toContain("AGENTS.md")
+      expect(existsSync(join(workspace, "AGENTS.md"))).toBe(true)
       expect(shareResult?.message).toContain("shares")
       expect(tagResult?.message).toContain("release candidate")
       expect(existsSync(join(homeDir, "feedback.log"))).toBe(true)

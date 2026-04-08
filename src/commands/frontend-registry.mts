@@ -430,10 +430,21 @@ async function initializeProject(cwd: string, force = false): Promise<Record<str
       content: `${JSON.stringify({ hooks: [] }, null, 2)}\n`,
     },
     {
+      path: join(cwd, "ONECLAW.md"),
+      content: [
+        "# OneClaw Project Instructions",
+        "",
+        "Add stable project instructions, coding conventions, safety constraints, and workflow notes here.",
+        "OneClaw also discovers `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/*.md`, and `.oneclaw/rules/*.md`.",
+        "",
+      ].join("\n"),
+    },
+    {
       path: join(oneclawDir, "README.md"),
       content: [
         "# OneClaw Project Runtime",
         "",
+        "- `../ONECLAW.md`: project-level instructions injected into prompts.",
         "- `memory.md`: project-level memory injected into prompts.",
         "- `hooks.json`: local hook definitions.",
         "- `tags/`: named session snapshots created by `/tag`.",
@@ -975,6 +986,62 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
     handler: async (args, context) => ({
       message: pretty(await initializeProject(context.cwd, words(args).includes("force"))),
     }),
+  })
+
+  registry.register({
+    name: "instructions",
+    description: "List, show, or initialize project instruction files",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts[0] ?? "list"
+      if (action === "list" || action === "show") {
+        const payload = await context.client.instructions({ includeContent: action === "show", cwd: context.cwd })
+        if (action === "list" || !parts[1]) {
+          return { message: pretty(payload) }
+        }
+        const files = Array.isArray(payload.files) ? payload.files as Array<Record<string, unknown>> : []
+        const target = parts.slice(1).join(" ")
+        const byIndex = Number.parseInt(target, 10)
+        const entry = files.find((file, index) => {
+          if (Number.isFinite(byIndex) && byIndex === index + 1) {
+            return true
+          }
+          return file.relativePath === target || file.path === target
+        })
+        if (!entry) {
+          return { message: `Instruction file not found: ${target}` }
+        }
+        return {
+          message: `${entry.relativePath ?? entry.path}\npath: ${entry.path}\n\n${entry.content ?? "(content not loaded)"}`,
+        }
+      }
+      if (action === "init") {
+        const requested = parts[1] ?? "oneclaw"
+        const force = parts.includes("--force") || parts.includes("force")
+        const targetMap: Record<string, { path: string; title: string }> = {
+          oneclaw: { path: join(context.cwd, "ONECLAW.md"), title: "OneClaw Project Instructions" },
+          agents: { path: join(context.cwd, "AGENTS.md"), title: "Agent Instructions" },
+          claude: { path: join(context.cwd, "CLAUDE.md"), title: "Claude Project Instructions" },
+        }
+        const target = targetMap[requested]
+        if (!target) {
+          return { message: "Usage: /instructions init [oneclaw|agents|claude] [--force]" }
+        }
+        if (!force && existsSync(target.path)) {
+          return { message: `Instruction file already exists: ${target.path}` }
+        }
+        await writeText(target.path, [
+          `# ${target.title}`,
+          "",
+          "Add stable project instructions, coding conventions, safety constraints, and workflow notes here.",
+          "",
+        ].join("\n"))
+        return {
+          message: `Created instruction file: ${target.path}`,
+        }
+      }
+      return { message: "Usage: /instructions [list|show [index|path]|init [oneclaw|agents|claude] [--force]]" }
+    },
   })
 
   registry.register({
