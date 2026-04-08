@@ -9,6 +9,7 @@ import { loadConfig } from "../config.mts"
 import type { KernelClient } from "../frontend/kernel-client.mts"
 import { MemoryManager } from "../memory/manager.mts"
 import {
+  auditPlugin,
   getUserPluginDir,
   installPluginFromPath,
   pluginLifecycleState,
@@ -3138,6 +3139,15 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         }
         return {
           message: pretty(await validatePluginDirectory(sourcePath)),
+        }
+      }
+      if (action === "audit") {
+        const target = args.replace(/^audit\s+/, "").trim()
+        if (!target) {
+          return { message: "Usage: /plugin audit <name-or-path>" }
+        }
+        return {
+          message: pretty(await auditPlugin(config, target)),
         }
       }
       if (action === "install") {

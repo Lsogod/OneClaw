@@ -1,4 +1,5 @@
-import { cp, mkdir, rm, stat, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 import type { OneClawConfig } from "../types.mts"
@@ -15,6 +16,8 @@ type PluginInstallRecord = {
   source: string
   destination: string
   version?: string
+  manifestSha256?: string
+  permissions?: string[]
   installedAt: string
 }
 
@@ -57,9 +60,90 @@ async function readManifest(source: string): Promise<{ path: string; manifest: R
   throw new Error(`Plugin manifest not found in ${source}. Expected one of: ${PLUGIN_MANIFEST_CANDIDATES.join(", ")}`)
 }
 
+async function sha256File(pathname: string): Promise<string> {
+  return createHash("sha256").update(await readFile(pathname)).digest("hex")
+}
+
+function normalizePermissions(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  return [...new Set(value.filter(item => typeof item === "string").map(item => item.trim()).filter(Boolean))].sort()
+}
+
+async function collectPluginInventory(root: string): Promise<{
+  totalFiles: number
+  jsModules: string[]
+  hookFiles: string[]
+  skillFiles: string[]
+  manifestFiles: string[]
+}> {
+  const jsModules: string[] = []
+  const hookFiles: string[] = []
+  const skillFiles: string[] = []
+  const manifestFiles: string[] = []
+  let totalFiles = 0
+  const queue: Array<{ path: string; relative: string }> = [{ path: root, relative: "" }]
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    for (const entry of await readdir(current.path, { withFileTypes: true })) {
+      if (entry.name === "node_modules" || entry.name === ".git") {
+        continue
+      }
+      const fullPath = join(current.path, entry.name)
+      const relativePath = current.relative ? `${current.relative}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        queue.push({ path: fullPath, relative: relativePath })
+        continue
+      }
+      totalFiles += 1
+      if (/\.(mjs|js|mts|ts)$/.test(entry.name)) {
+        jsModules.push(relativePath)
+      }
+      if (/hooks?\.(json|ya?ml|mjs|js|mts|ts)$/i.test(entry.name) || relativePath.includes("/hooks/")) {
+        hookFiles.push(relativePath)
+      }
+      if (entry.name.endsWith(".md") && /(^|\/)(skills?|commands?)\//.test(relativePath)) {
+        skillFiles.push(relativePath)
+      }
+      if (PLUGIN_MANIFEST_CANDIDATES.includes(relativePath)) {
+        manifestFiles.push(relativePath)
+      }
+    }
+  }
+  return {
+    totalFiles,
+    jsModules: jsModules.sort(),
+    hookFiles: hookFiles.sort(),
+    skillFiles: skillFiles.sort(),
+    manifestFiles: manifestFiles.sort(),
+  }
+}
+
+function inferPermissionWarnings(manifest: Record<string, unknown>, permissions: string[], inventory: Awaited<ReturnType<typeof collectPluginInventory>>): string[] {
+  const warnings: string[] = []
+  const hasPermission = (permission: string) => permissions.includes(permission)
+  if (permissions.length === 0) {
+    warnings.push("manifest.permissions is missing; review this plugin before enabling it.")
+  }
+  if ((typeof manifest.main === "string" || inventory.jsModules.length > 0) && !hasPermission("code")) {
+    warnings.push("Plugin contains executable JS/TS modules but does not declare permission 'code'.")
+  }
+  if ((typeof manifest.hooksFile === "string" || inventory.hookFiles.length > 0) && !hasPermission("hooks")) {
+    warnings.push("Plugin contains hooks but does not declare permission 'hooks'.")
+  }
+  if ((Array.isArray(manifest.tools) || typeof manifest.toolsFile === "string") && !hasPermission("tools")) {
+    warnings.push("Plugin exposes tools but does not declare permission 'tools'.")
+  }
+  if ((Array.isArray(manifest.systemPromptPatches) || typeof manifest.skillsDir === "string" || inventory.skillFiles.length > 0) && !hasPermission("prompt")) {
+    warnings.push("Plugin can modify prompt/skills context but does not declare permission 'prompt'.")
+  }
+  return warnings
+}
+
 export async function validatePluginDirectory(
   sourcePath: string,
-): Promise<{ name: string; version?: string; manifestPath: string; warnings: string[] }> {
+): Promise<{ name: string; version?: string; manifestPath: string; manifestSha256: string; permissions: string[]; warnings: string[] }> {
   const source = resolve(sourcePath)
   const sourceStats = await stat(source).catch(() => null)
   if (!sourceStats?.isDirectory()) {
@@ -78,11 +162,70 @@ export async function validatePluginDirectory(
   if (declaredPermissions !== undefined && !Array.isArray(declaredPermissions)) {
     warnings.push("manifest.permissions should be an array when present.")
   }
+  const permissions = normalizePermissions(declaredPermissions)
   return {
     name,
     version,
     manifestPath,
+    manifestSha256: await sha256File(manifestPath),
+    permissions,
     warnings,
+  }
+}
+
+export async function auditPlugin(
+  config: OneClawConfig,
+  target: string,
+): Promise<{
+  source: string
+  installedName?: string
+  name: string
+  version?: string
+  manifestPath: string
+  manifestSha256: string
+  permissions: string[]
+  inventory: Awaited<ReturnType<typeof collectPluginInventory>>
+  warnings: string[]
+  state: {
+    installed: boolean
+    disabled: boolean
+    recordedSource?: string
+    destination?: string
+  }
+}> {
+  const state = await readPluginState(config)
+  const installedRecord = state.installed?.[target]
+  const source = existsSync(target) ? resolve(target) : installedRecord?.destination ?? join(userPluginDir(config), target)
+  const sourceStats = await stat(source).catch(() => null)
+  if (!sourceStats?.isDirectory()) {
+    throw new Error(`Plugin not found: ${target}`)
+  }
+  const { path: manifestPath, manifest } = await readManifest(source)
+  const validation = await validatePluginDirectory(source)
+  const inventory = await collectPluginInventory(source)
+  const warnings = [
+    ...validation.warnings,
+    ...inferPermissionWarnings(manifest, validation.permissions, inventory),
+  ]
+  const installedName = installedRecord ? target : Object.entries(state.installed ?? {})
+    .find(([, record]) => resolve(record.destination) === source)?.[0]
+  const disabledPlugins = new Set(state.disabledPlugins ?? [])
+  return {
+    source,
+    installedName,
+    name: validation.name,
+    version: validation.version,
+    manifestPath,
+    manifestSha256: validation.manifestSha256,
+    permissions: validation.permissions,
+    inventory,
+    warnings,
+    state: {
+      installed: Boolean(installedName),
+      disabled: disabledPlugins.has(validation.name) || existsSync(join(source, ".oneclaw-disabled")),
+      recordedSource: installedRecord?.source,
+      destination: installedRecord?.destination,
+    },
   }
 }
 
@@ -109,6 +252,8 @@ export async function installPluginFromPath(
       source,
       destination,
       version: validation.version,
+      manifestSha256: validation.manifestSha256,
+      permissions: validation.permissions,
       installedAt: new Date().toISOString(),
     },
   }

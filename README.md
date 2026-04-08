@@ -331,7 +331,7 @@ Plugin 支持：
 - hook definitions
 - module hooks
 - plugin tools
-- install / uninstall / reload / inspect
+- install / uninstall / reload / inspect / audit
 
 示例 plugin 位于：
 
@@ -346,6 +346,7 @@ Skills 与 memory 会进入 prompt assembly，并受 context budget 约束。常
 /plugin show <name>
 /plugin tools <name>
 /plugin hooks <name>
+/plugin audit <name-or-path>
 /plugin reload
 /hooks files
 /hooks add command <event> <name> <command>
@@ -358,6 +359,8 @@ Skills 与 memory 会进入 prompt assembly，并受 context budget 约束。常
 /memory add <scope> <text>
 /memory search <query>
 ```
+
+`/plugin audit` 会检查 manifest、声明权限、可执行模块、hooks、skills、manifest hash 和安装来源，用于安装前审计和本地插件治理。
 
 ---
 
