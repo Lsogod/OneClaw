@@ -363,6 +363,13 @@ function createFakeClient(overrides: Record<string, unknown> = {}): KernelClient
       name,
       removed: true,
     }),
+    mcpConfigureAuth: async (payload: Record<string, unknown>) => ({
+      name: payload.name,
+      mode: payload.mode,
+      key: payload.key ?? "MCP_AUTH_TOKEN",
+      redacted: true,
+      status: { name: payload.name, state: "connected" },
+    }),
     mcpReadResource: async () => ({
       content: "resource content",
     }),
@@ -729,6 +736,7 @@ describe("Frontend command registry", () => {
     const mcp = registry.lookup("/mcp reconnect fake")
     const mcpAdd = registry.lookup("/mcp add fake python3 server.py")
     const mcpRemove = registry.lookup("/mcp remove fake")
+    const mcpAuth = registry.lookup("/mcp auth fake bearer secret-token --key TOKEN")
     const mcpTemplates = registry.lookup("/mcp templates")
 
     const context = {
@@ -746,6 +754,7 @@ describe("Frontend command registry", () => {
     const mcpResult = await mcp?.command.handler(mcp.args, context)
     const mcpAddResult = await mcpAdd?.command.handler(mcpAdd.args, context)
     const mcpRemoveResult = await mcpRemove?.command.handler(mcpRemove.args, context)
+    const mcpAuthResult = await mcpAuth?.command.handler(mcpAuth.args, context)
     const mcpTemplatesResult = await mcpTemplates?.command.handler(mcpTemplates.args, context)
 
     expect(toolsResult?.message).toContain("read_file")
@@ -757,6 +766,8 @@ describe("Frontend command registry", () => {
     expect(mcpResult?.message).toContain("results")
     expect(mcpAddResult?.message).toContain("python3")
     expect(mcpRemoveResult?.message).toContain("removed")
+    expect(mcpAuthResult?.message).toContain("redacted")
+    expect((mcpAuthResult?.message ?? "").includes("secret-token")).toBe(false)
     expect(mcpTemplatesResult?.message).toContain("file://{path}")
   })
 

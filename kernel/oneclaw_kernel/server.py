@@ -241,6 +241,13 @@ def main() -> int:
                 result = kernel.mcp_add_server(params.get("config") or {})
             elif method == "mcp_remove_server":
                 result = kernel.mcp_remove_server(params["name"])
+            elif method == "mcp_configure_auth":
+                result = kernel.mcp_configure_auth(
+                    params["name"],
+                    params["mode"],
+                    params["value"],
+                    params.get("key"),
+                )
             elif method == "mcp_read_resource":
                 result = kernel.mcp_read_resource(params["server"], params["uri"])
             elif method == "create_session":

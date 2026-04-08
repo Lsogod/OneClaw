@@ -3430,6 +3430,21 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       if (parts[0] === "remove" && parts[1]) {
         return { message: pretty(await context.client.mcpRemoveServer(parts[1])) }
       }
+      if (parts[0] === "auth" && parts[1] && parts[2] && parts[3]) {
+        const mode = parts[2]
+        if (mode !== "env" && mode !== "bearer") {
+          return { message: "Usage: /mcp auth <server> <env|bearer> <value> [--key KEY]" }
+        }
+        const key = takeFlagValue(parts, ["--key"])
+        return {
+          message: pretty(await context.client.mcpConfigureAuth({
+            name: parts[1],
+            mode,
+            value: parts[3],
+            ...(key ? { key } : {}),
+          })),
+        }
+      }
       if (parts[0] === "templates") {
         const payload = await context.client.mcp({ verbose: true }) as { resourceTemplates?: unknown }
         return { message: pretty(payload.resourceTemplates ?? []) }
@@ -3438,7 +3453,7 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
         const payload = await context.client.mcpReadResource(parts[1], parts.slice(2).join(" "))
         return { message: String(payload.content ?? "") }
       }
-      return { message: "Usage: /mcp [status|tools|resources|templates|reconnect [server]|add <name> <command> [args...]|remove <server>|read <server> <uri>]" }
+      return { message: "Usage: /mcp [status|tools|resources|templates|reconnect [server]|add <name> <command> [args...]|remove <server>|auth <server> <env|bearer> <value> [--key KEY]|read <server> <uri>]" }
     },
   })
 

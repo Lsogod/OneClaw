@@ -460,6 +460,10 @@ export class KernelClient {
     return this.request<Record<string, unknown>>("mcp_remove_server", { name })
   }
 
+  mcpConfigureAuth(payload: { name: string; mode: "env" | "bearer"; value: string; key?: string }) {
+    return this.request<Record<string, unknown>>("mcp_configure_auth", payload)
+  }
+
   mcpReadResource(server: string, uri: string) {
     return this.request<Record<string, unknown>>("mcp_read_resource", { server, uri })
   }

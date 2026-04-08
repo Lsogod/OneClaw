@@ -541,6 +541,13 @@ while True:
                 "args": [server_script],
             })
             self.assertEqual(added["status"]["state"], "connected")
+            auth = kernel.mcp_configure_auth("fake", "bearer", "secret-token", "FAKE_TOKEN")
+            self.assertTrue(auth["redacted"])
+            self.assertNotIn("secret-token", json.dumps(auth))
+            self.assertEqual(auth["key"], "FAKE_TOKEN")
+            self.assertEqual(auth["status"]["state"], "connected")
+            configured = next(server for server in kernel.config["mcpServers"] if server["name"] == "fake")
+            self.assertEqual(configured["env"]["FAKE_TOKEN"], "Bearer secret-token")
             kernel.shutdown()
 
     def test_plugin_tools_and_prompt_patches_load_in_python_kernel(self) -> None:

@@ -310,9 +310,12 @@ OneClaw 支持 stdio MCP server，并把 MCP tools/resources/resource templates 
 /mcp templates
 /mcp add <name> <command> [args...]
 /mcp remove <server>
+/mcp auth <server> <env|bearer> <token> [--key ENV_KEY]
 /mcp reconnect [server]
 /mcp read <server> <uri>
 ```
+
+`/mcp auth` 会把 token 写入用户级 OneClaw 配置并在命令输出中脱敏，适合 stdio MCP server 通过环境变量读取认证信息的场景。
 
 TUI 中使用 `Ctrl+M` 可以切换 MCP 面板。
 
@@ -411,7 +414,7 @@ bun run sandbox:smoke
 | `/lsp` | 运行轻量 Python code-intelligence：symbol、definition、references、hover |
 | `/fetch` | 通过 kernel `web_fetch` 读取 HTTP(S) URL |
 | `/search-web` | 通过 kernel `web_search` 搜索网页 |
-| `/mcp` | 管理 MCP |
+| `/mcp` | 管理 MCP，包括 server、resource、template、auth |
 | `/plugin` / `/skills` / `/hooks` | 管理 plugin、skills 与 lifecycle hooks |
 | `/plan` / `/review` | 运行规划或 review prompt |
 | `/tasks` / `/agents` | 管理 task 与 team |
@@ -508,7 +511,7 @@ OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
 
 - CLI / TUI / Python kernel / bridge 可运行
 - 5 个公开 provider workflow
-- MCP dynamic add/remove/reconnect/read/templates
+- MCP dynamic add/remove/reconnect/read/templates/auth
 - plugin lifecycle
 - tool search 与本地 cron registry
 - lightweight Python LSP/code-intelligence
@@ -519,4 +522,4 @@ OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
 - sandbox fallback smoke
 - macOS/Linux/Windows CI 全绿
 
-后续主要是生态厚度工作：更多 tool、更多 provider 真实 E2E、MCP auth/resource 细节、plugin trust/source policy、LSP/channels/themes/vim/voice 等更完整的平台层。
+后续主要是生态厚度工作：更多 tool、更多 provider 真实 E2E、MCP resource 细节、plugin trust/source policy、LSP/channels/themes/vim/voice 等更完整的平台层。

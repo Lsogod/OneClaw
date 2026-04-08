@@ -2611,6 +2611,49 @@ class OneClawKernel:
             "removed": bool(removed_from_config or removed_runtime.get("removed")),
         }
 
+    def mcp_configure_auth(self, name: str, mode: str, value: str, key: str | None = None) -> dict[str, Any]:
+        server_name = str(name or "")
+        auth_mode = str(mode or "").lower()
+        if not server_name:
+            raise RuntimeError("MCP server name is required")
+        if auth_mode not in {"env", "bearer"}:
+            raise RuntimeError("MCP auth mode must be env or bearer")
+        if not value:
+            raise RuntimeError("MCP auth value is required")
+
+        servers = [dict(server) for server in self.config.get("mcpServers", [])]
+        target_index = next(
+            (index for index, server in enumerate(servers) if str(server.get("name") or "") == server_name),
+            None,
+        )
+        if target_index is None:
+            raise RuntimeError(f"MCP server not found: {server_name}")
+        target = dict(servers[target_index])
+        transport = str(target.get("transport") or "stdio")
+        if transport != "stdio":
+            raise RuntimeError("Only stdio MCP auth is currently supported")
+
+        env_key = str(key or "MCP_AUTH_TOKEN")
+        if not env_key:
+            raise RuntimeError("MCP auth env key is required")
+        env = dict(target.get("env") or {})
+        env[env_key] = f"Bearer {value}" if auth_mode == "bearer" else value
+        target["env"] = env
+        servers[target_index] = target
+
+        path = save_user_config_patch({"mcpServers": servers}, self.cwd)
+        self.config["mcpServers"] = servers
+        status = self.mcp.add_server(target)
+        return {
+            "path": path,
+            "name": server_name,
+            "mode": auth_mode,
+            "key": env_key,
+            "transport": transport,
+            "redacted": True,
+            "status": status,
+        }
+
     def mcp_read_resource(self, server_name: str, uri: str) -> dict[str, Any]:
         return {
             "server": server_name,
@@ -3033,6 +3076,21 @@ class OneClawKernel:
                     "properties": {
                         "server": {"type": "string"},
                         "uri": {"type": "string"},
+                    },
+                },
+            },
+            {
+                "name": "mcp_auth",
+                "description": "Configure stdio MCP authentication through an environment variable and reconnect the server.",
+                "readOnly": False,
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["serverName", "mode", "value"],
+                    "properties": {
+                        "serverName": {"type": "string"},
+                        "mode": {"type": "string"},
+                        "value": {"type": "string"},
+                        "key": {"type": "string"},
                     },
                 },
             },
@@ -3778,6 +3836,18 @@ class OneClawKernel:
                     "ok": True,
                     "output": self.mcp.read_resource(server_name, uri),
                 }
+            except Exception as error:
+                return {"ok": False, "output": str(error)}
+        if name == "mcp_auth":
+            server_name = input_payload.get("serverName")
+            mode = input_payload.get("mode")
+            value = input_payload.get("value")
+            key = input_payload.get("key")
+            if not isinstance(server_name, str) or not isinstance(mode, str) or not isinstance(value, str) or not value:
+                return {"ok": False, "output": "Missing required fields: serverName, mode, value"}
+            try:
+                result = self.mcp_configure_auth(server_name, mode, value, key if isinstance(key, str) else None)
+                return {"ok": True, "output": json.dumps(result, indent=2)}
             except Exception as error:
                 return {"ok": False, "output": str(error)}
         if name.startswith("mcp__"):
