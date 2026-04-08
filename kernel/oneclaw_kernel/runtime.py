@@ -3573,7 +3573,7 @@ class OneClawKernel:
         }
         try:
             completed = subprocess.run(
-                shlex.split(command),
+                shlex.split(command, posix=os.name != "nt"),
                 input=json.dumps(payload),
                 text=True,
                 capture_output=True,
