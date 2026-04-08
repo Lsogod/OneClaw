@@ -421,7 +421,7 @@ export function sessionToTranscript(
     })
     rows.push({
       kind: "meta",
-      text: "Useful keys: Enter submit, Esc interrupt, Ctrl+N / Ctrl+P switch sessions, Ctrl+R refresh.",
+      text: "Useful keys: Enter submit, Esc interrupt, ↑/↓ history, Ctrl+O sessions, Ctrl+K palette, Ctrl+R refresh.",
     })
   }
   return rows
@@ -1948,8 +1948,14 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
 
   const cycleMcpView = useEffectEvent(() => {
     const modes: McpViewMode[] = ["overview", "statuses", "tools", "resources"]
-    setMcpSelectionIndex(0)
-    setMcpViewMode(previous => modes[(modes.indexOf(previous) + 1) % modes.length])
+    startTransition(() => {
+      setMcpSelectionIndex(0)
+      setMcpViewMode(previous => {
+        const nextMode = modes[(modes.indexOf(previous) + 1) % modes.length]
+        setStatusLine(`MCP view: ${nextMode}`)
+        return nextMode
+      })
+    })
   })
 
   const moveMcpSelection = useEffectEvent((delta: 1 | -1) => {
@@ -3032,38 +3038,32 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
       seedBridgeCommand("run")
       return
     }
-    if ((key.upArrow || (key.ctrl && input === "p")) && inputBuffer.length > 0) {
+    if (key.upArrow || (key.ctrl && input === "p")) {
+      if (history.length === 0) {
+        return
+      }
       startTransition(() => {
-        const nextIndex = history.length === 0
-          ? -1
-          : historyIndex < 0
-            ? history.length - 1
-            : Math.max(0, historyIndex - 1)
+        const nextIndex = historyIndex < 0
+          ? history.length - 1
+          : Math.max(0, historyIndex - 1)
         setHistoryIndex(nextIndex)
         setInputBuffer(historyValue(history, nextIndex))
       })
       return
     }
-    if ((key.downArrow || (key.ctrl && input === "n")) && inputBuffer.length > 0) {
+    if (key.downArrow || (key.ctrl && input === "n")) {
+      if (history.length === 0) {
+        return
+      }
       startTransition(() => {
-        const nextIndex = history.length === 0
+        const nextIndex = historyIndex < 0
           ? -1
-          : historyIndex < 0
+          : historyIndex >= history.length - 1
             ? -1
-            : historyIndex >= history.length - 1
-              ? -1
-              : historyIndex + 1
+            : historyIndex + 1
         setHistoryIndex(nextIndex)
         setInputBuffer(historyValue(history, nextIndex))
       })
-      return
-    }
-    if ((key.upArrow || (key.ctrl && input === "p")) && inputBuffer.length === 0) {
-      void rotateSession(-1)
-      return
-    }
-    if ((key.downArrow || (key.ctrl && input === "n")) && inputBuffer.length === 0) {
-      void rotateSession(1)
       return
     }
     if ((key.ctrl && input === "r") || (key.ctrl && input === "l")) {
@@ -3193,13 +3193,11 @@ export function OneClawInkApp({ cwd }: { cwd: string }) {
             {" artifacts  "}
             <Text color={presentation.primaryColor}>{presentation.observabilityKey}</Text>
             {" observability  "}
+            <Text color={presentation.primaryColor}>{"esc"}</Text>
+            {" interrupt  "}
             <Text color={presentation.primaryColor}>{"[ ]"}</Text>
             {" pick  "}
             <Text color={presentation.primaryColor}>{"."}</Text>
-            {" actions  "}
-            <Text color={presentation.primaryColor}>{presentation.submitKey}</Text>
-            {" inspect  "}
-            <Text color={presentation.primaryColor}>{"x/e/m/r"}</Text>
             {" actions"}
           </Text>
         </Box>
