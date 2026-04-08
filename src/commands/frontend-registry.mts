@@ -4,6 +4,12 @@ import { spawnSync } from "node:child_process"
 import { basename, join } from "node:path"
 import { collectProviderAuthStatuses } from "../providers/auth.mts"
 import { TeamRegistry } from "../agents/team-registry.mts"
+import {
+  findCommandSnippet,
+  initCommandSnippet,
+  listCommandSnippets,
+  renderCommandSnippet,
+} from "./snippets.mts"
 import { Coordinator } from "../coordinator/coordinator.mts"
 import { loadConfig } from "../config.mts"
 import type { KernelClient } from "../frontend/kernel-client.mts"
@@ -22,7 +28,7 @@ import {
   validatePluginDirectory,
 } from "../plugins/installer.mts"
 import { TaskManager } from "../tasks/task-manager.mts"
-import { appendText, ensureDir, expandHome, readTextIfExists, slugify, writeText } from "../utils.mts"
+import { appendText, ensureDir, expandHome, limitText, readTextIfExists, slugify, writeText } from "../utils.mts"
 
 const ONECLAW_NEXT_VERSION = "0.2.0"
 const VALID_PERMISSION_MODES = new Set(["allow", "ask", "deny"])
@@ -3273,6 +3279,54 @@ export function createFrontendCommandRegistry(): FrontendCommandRegistry {
       return {
         message: pretty(await context.client.skills()),
       }
+    },
+  })
+
+  registry.register({
+    name: "commands",
+    description: "List, show, initialize, or run custom command snippets",
+    handler: async (args, context) => {
+      const parts = words(args)
+      const action = parts[0] ?? "list"
+      const config = await loadConfig(context.cwd)
+      if (!parts[0] || action === "list") {
+        const snippets = await listCommandSnippets(config, context.cwd)
+        return {
+          message: snippets.length
+            ? snippets.map(snippet => `${snippet.name} [${snippet.source}] ${snippet.description || snippet.path}`).join("\n")
+            : "(no custom command snippets)",
+        }
+      }
+      if (action === "init") {
+        return {
+          message: pretty(await initCommandSnippet(context.cwd, parts[1] ?? "review")),
+        }
+      }
+      if ((action === "show" || action === "run") && parts[1]) {
+        const name = parts[1]
+        const snippet = await findCommandSnippet(config, context.cwd, name)
+        if (!snippet) {
+          return { message: `Command snippet not found: ${name}` }
+        }
+        if (action === "show") {
+          return { message: pretty({ ...snippet, body: limitText(snippet.body, 4000) }) }
+        }
+        const snippetArgs = args.replace(/^run\s+\S+\s*/, "").trim()
+        const prompt = renderCommandSnippet(snippet, snippetArgs)
+        const result = await context.client.runPrompt(prompt, {
+          sessionId: context.sessionId,
+          cwd: context.cwd,
+          metadata: {
+            via: "command-snippet",
+            command: snippet.name,
+            source: snippet.source,
+            path: snippet.path,
+          },
+        })
+        context.setSessionId?.(result.sessionId)
+        return { message: result.text }
+      }
+      return { message: "Usage: /commands [list|init [name]|show <name>|run <name> [args...]]" }
     },
   })
 

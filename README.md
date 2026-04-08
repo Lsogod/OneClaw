@@ -356,12 +356,18 @@ Skills 与 memory 会进入 prompt assembly，并受 context budget 约束。常
 /skills
 /skills search <query>
 /skills show <name>
+/commands list
+/commands show <name>
+/commands run <name> [args...]
+/commands init [name]
 /memory
 /memory add <scope> <text>
 /memory search <query>
 ```
 
 `/plugin audit` 会检查 manifest、声明权限、可执行模块、hooks、skills、manifest hash 和安装来源。`/plugin trust` 会记录可信 manifest hash 与来源路径，用于安装前审计和本地插件治理。
+
+自定义 command snippets 支持项目级 `.oneclaw/commands/*.md`、用户级 `~/.oneclaw/commands/*.md`、以及 plugin `commands/*.md`。`{{args}}` 会在运行时替换成 `/commands run` 后面的参数。
 
 ---
 

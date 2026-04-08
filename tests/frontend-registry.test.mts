@@ -1158,6 +1158,73 @@ describe("Frontend command registry", () => {
     expect(showResult?.message).toContain("Always verify before release.")
   })
 
+  test("commands snippets list, show, run, and initialize custom project commands", async () => {
+    const originalHome = process.env.ONECLAW_HOME
+    const homeDir = join(tmpdir(), `oneclaw-commands-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const workspace = join(tmpdir(), `oneclaw-commands-workspace-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const projectCommands = join(workspace, ".oneclaw", "commands")
+    const userCommands = join(homeDir, "commands")
+    const pluginCommands = join(homeDir, "plugins", "demo-plugin", "commands")
+    await mkdir(projectCommands, { recursive: true })
+    await mkdir(userCommands, { recursive: true })
+    await mkdir(pluginCommands, { recursive: true })
+    await writeFile(join(projectCommands, "release.md"), [
+      "---",
+      "name: release",
+      "description: Release checklist",
+      "---",
+      "Release {{args}} with tests.",
+    ].join("\n"))
+    await writeFile(join(userCommands, "daily.md"), "Run the daily command.")
+    await writeFile(join(pluginCommands, "plugin-review.md"), "Review plugin context.")
+    process.env.ONECLAW_HOME = homeDir
+
+    try {
+      const registry = createFrontendCommandRegistry()
+      const listLookup = registry.lookup("/commands list")
+      const showLookup = registry.lookup("/commands show release")
+      const runLookup = registry.lookup("/commands run release v1.2.3")
+      const initLookup = registry.lookup("/commands init smoke")
+      let capturedPrompt = ""
+
+      const context = {
+        client: createFakeClient({
+          runPrompt: async (prompt: string) => {
+            capturedPrompt = prompt
+            return {
+              sessionId: "session_current",
+              text: `ran snippet: ${prompt}`,
+              iterations: 1,
+              stopReason: "end_turn",
+            }
+          },
+        }),
+        sessionId: "session_current",
+        cwd: workspace,
+      } as never
+
+      const listResult = await listLookup?.command.handler(listLookup.args, context)
+      const showResult = await showLookup?.command.handler(showLookup.args, context)
+      const runResult = await runLookup?.command.handler(runLookup.args, context)
+      const initResult = await initLookup?.command.handler(initLookup.args, context)
+
+      expect(listResult?.message).toContain("release [project]")
+      expect(listResult?.message).toContain("daily [user]")
+      expect(listResult?.message).toContain("plugin-review [plugin]")
+      expect(showResult?.message).toContain("Release {{args}}")
+      expect(runResult?.message).toContain("v1.2.3")
+      expect(capturedPrompt).toContain("Release v1.2.3 with tests.")
+      expect(initResult?.message).toContain("smoke.md")
+      expect(existsSync(join(projectCommands, "smoke.md"))).toBe(true)
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.ONECLAW_HOME
+      } else {
+        process.env.ONECLAW_HOME = originalHome
+      }
+    }
+  })
+
   test("memory add/search/remove commands manage persisted project memory entries", async () => {
     const originalHome = process.env.ONECLAW_HOME
     const homeDir = join(tmpdir(), `oneclaw-memory-home-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
