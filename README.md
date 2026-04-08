@@ -23,9 +23,9 @@
   <img src="https://img.shields.io/badge/Providers-5-green" alt="Providers">
 </p>
 
-**OneClaw** 是一个面向编程任务的开放式 Agent Harness。它借鉴 OpenHarness 的优秀分层：把模型 provider、query loop、tools、MCP、hooks、memory、session、sandbox、plugin、bridge、tasks 和 team/swarm 控制面拆成可维护的运行时模块。
+**OneClaw** 是一个面向编程任务的开放式 Agent Harness。它把模型 provider、query loop、tools、MCP、hooks、memory、session、sandbox、plugin、bridge、tasks 和 team/swarm 控制面拆成可维护的运行时模块。
 
-当前仓库已经是新的 **OneClaw** 根项目。旧 CLI 历史实现保留在同级目录 `OneClaw-CLI`，本仓库只承载新的 harness runtime。
+当前仓库是 **OneClaw** 的正式根项目，承载完整的 harness runtime、TUI、bridge、plugin、MCP 和 swarm 工作流。
 
 ---
 
@@ -233,7 +233,7 @@ TUI 内也可以使用：
 /model <model>
 ```
 
-Profile 会持久化到 `~/.oneclaw/oneclaw.config.json`，内置 profile 只读，适合保留 OpenHarness 风格的“命名 provider workflow”。
+Profile 会持久化到 `~/.oneclaw/oneclaw.config.json`，内置 profile 只读，适合管理多 provider、多模型和本地兼容网关。
 
 `/provider setup-wizard` 和 TUI 中的 provider setup flow 只写入 `kind/model/baseUrl/label/description` 等非密钥字段。API key 不会写入 OneClaw 配置；命令会提示应使用的环境变量，例如 `ONECLAW_API_KEY`、`OPENAI_API_KEY`、`ANTHROPIC_API_KEY`，再调用 provider diagnostics/test 检查连通性。
 
@@ -245,7 +245,7 @@ Profile 会持久化到 `~/.oneclaw/oneclaw.config.json`，内置 profile 只读
 one ui
 ```
 
-OneClaw 的 TUI 按 OpenHarness 的 transcript-first 思路组织，但保留 OneClaw 的 bridge/team 控制面。
+OneClaw 的 TUI 以 transcript 为主轴，并把 provider、MCP、artifact、bridge、team 和 observability 控制面整合到同一个终端界面里。
 
 | 按键 | 行为 |
 |---|---|
@@ -367,7 +367,7 @@ DELETE /channels/:name
 
 OneClaw 使用项目级 `.oneclaw/artifacts/` 管理本地 artifact。它用于沉淀 tool result、swarm summary、诊断包和导出的文本结果，不依赖 bridge server。
 
-当前 kernel 内置 `44` 个 tools，覆盖 OpenHarness 默认工具面的主要类别：文件/搜索/编辑/shell、LSP、MCP auth/resources、skills、config、brief、sleep、worktree、plan mode、cron、todo、task、agent、team 和 remote trigger。Plugin tools 与 MCP tools 会在运行时动态追加。
+当前 kernel 内置 `44` 个 tools，覆盖文件/搜索/编辑/shell、LSP、MCP auth/resources、skills、config、brief、sleep、worktree、plan mode、cron、todo、task、agent、team 和 remote trigger。Plugin tools 与 MCP tools 会在运行时动态追加。
 
 ```text
 /artifacts list [query]
@@ -539,7 +539,7 @@ bun run sandbox:smoke
 | `/vim` / `/voice` | 持久化前端输入模式 hint 和 voice keyterms |
 | `/continue` | 基于当前 session 继续执行 |
 | `/tools` / `/tool-search` | 查看或搜索 tool registry |
-| `/cron` | 管理 OpenHarness 风格的本地 cron job registry |
+| `/cron` | 管理本地 cron job registry |
 | `/todo` | 管理当前 session 的 todo 状态，可用 `--artifact` 沉淀结果 |
 | `/symbols` | 通过 kernel `code_symbols` 索引或搜索代码符号，可用 `--artifact` 沉淀结果 |
 | `/lsp` | 运行轻量 Python code-intelligence：symbol、definition、references、hover，可用 `--artifact` 沉淀结果 |
@@ -584,10 +584,6 @@ OneClaw/
 └── README.md
 ```
 
-旧 OneClaw CLI 历史实现保留在同级目录 `OneClaw-CLI`，不属于当前 runtime 项目。
-
----
-
 ## 开发与验证
 
 ```bash
@@ -613,9 +609,7 @@ CI 当前覆盖：
 
 ---
 
-## 与 OpenHarness 的关系
-
-OneClaw 借鉴了 OpenHarness 中最值得保留的 harness 设计：
+## 设计原则
 
 - kernel 与 frontend 分离
 - provider workflow/profile
@@ -631,19 +625,11 @@ OneClaw 借鉴了 OpenHarness 中最值得保留的 harness 设计：
 - session/resume/export/compact
 - bridge、tasks、team/swarm 控制面
 
-但 OneClaw 不是 OpenHarness 的克隆。它保留了自己的产品目标：
-
-- 主命令固定为 `one`
-- 更强调 Codex/Subscription provider 路径
-- 更强调 bridge control plane 和 team/task 管理
-- 更轻量的仓库结构
-- 更直接的跨平台 launcher 与安装 smoke
-
 ---
 
 ## 当前状态
 
-OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
+OneClaw 当前状态：
 
 - CLI / TUI / Python kernel / bridge 可运行
 - 5 个公开 provider workflow
@@ -657,7 +643,7 @@ OneClaw 已经是独立项目，不再是旧仓子目录。当前状态：
 - theme/output-style catalog loading：project/user/builtin，TUI 会消费当前 theme/keybindings
 - memory/session 管理
 - task/team/swarm 基础生命周期，包含 split/review-auto/merge-summary/diff/worktree-flow artifacts
-- OpenHarness 风格 kernel tool surface：44 个内置 tools，并支持 plugin/MCP 动态扩展
+- kernel tool surface：44 个内置 tools，并支持 plugin/MCP 动态扩展
 - sandbox fallback smoke
 - macOS/Linux/Windows CI 全绿
 
